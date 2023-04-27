@@ -1,0 +1,5 @@
+mutation deleteMessageMutation($messageIds: [BigInt!]!) {
+	messagesDelete(messageIds: $messageIds) {
+		edgeIds
+	}
+}
