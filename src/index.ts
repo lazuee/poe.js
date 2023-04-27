@@ -1,5 +1,6 @@
 import { setTimeout } from "node:timers/promises";
 import { ofetch } from "ofetch";
+import { fileURLToPath } from "url";
 
 import fs from "node:fs";
 import md5 from "md5";
@@ -74,7 +75,7 @@ class Poe extends EventEmitter {
 	}
 
 	private load_queries() {
-		const folder_path = path.join(__dirname, "..", "..", "graphql");
+		const folder_path = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "graphql");
 		const files = fs.readdirSync(folder_path);
 		for (const filename of files) {
 			const ext = path.extname(filename);
