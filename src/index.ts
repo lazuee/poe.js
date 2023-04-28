@@ -91,6 +91,14 @@ class Poe extends EventEmitter {
 		}
 	}
 
+	set_useragent(useragent: string) {
+		if (typeof useragent === "string" && useragent.trim().split(" ").length) {
+			this.__headers["User-Agent"] = useragent;
+		}
+
+		return this;
+	}
+
 	get ready() {
 		return this.__is_ready;
 	}
