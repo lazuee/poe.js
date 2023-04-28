@@ -1,7 +1,7 @@
 {
 	"description": "A package for interacting with AI models from poe.com",
 	"name": "@lazuee/poe.js",
-	"version": "0.0.3",
+	"version": "0.0.4",
 	"license": "MIT",
 	"sideEffects": false,
 	"type": "module",
@@ -26,6 +26,15 @@
 	},
 	"scripts": {
 		"build": "unbuild"
+	},
+	"unbuild": {
+		"declaration": true,
+		"rollup": {
+			"emitCJS": true
+		},
+		"entries": [
+			"src/index"
+		]
 	},
 	"homepage": "https://github.com/lazuee/poe.js",
 	"repository": {
