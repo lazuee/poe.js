@@ -288,13 +288,11 @@ class Poe extends EventEmitter {
 				if (message_data.message_type !== "subscriptionUpdate") continue;
 
 				const message = message_data.payload?.data?.messageAdded;
-				// Skip messages that do not contain a messageAdded payload
-				if (!message) rejectFunc(new Error("Message Added is null"));
 
 				if (message?.author !== "human" && message?.state === "complete") {
-					resolveFunc(message.text);
 					//@ts-ignore
 					this.__ws!.removeEventListener("message", on_message);
+					return resolveFunc(message.text);
 				}
 			}
 		};
