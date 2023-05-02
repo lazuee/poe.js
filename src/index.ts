@@ -1,14 +1,23 @@
-import { setTimeout } from "node:timers/promises";
+import { setTimeout } from "timers/promises";
 import { ofetch } from "ofetch";
 import { fileURLToPath } from "url";
 
-import fs from "node:fs";
+import fs from "fs";
 import md5 from "md5";
 import path from "path";
 import WebSocket from "ws";
 
 import type { AvailableBot, ChannelData, ChatOfBotDisplayName, Conversation, DeletionState, Model } from "./types";
-import EventEmitter from "node:events";
+import EventEmitter from "events";
+import PQueue from "p-queue-compat";
+
+let index = 0;
+
+const queue = new PQueue({ concurrency: 1 });
+queue.on("completed", () => {
+	// reset queue count, if there's no pending queue
+	if (!queue.size) index = 0;
+});
 
 function extractFormKey(html: string) {
 	const scriptRegex = /<script>if\(.+\)throw new Error;(.+)<\/script>/;
@@ -269,7 +278,32 @@ class Poe extends EventEmitter {
 		);
 	}
 
-	async ask(chat_bot: Model, message: string | Conversation[], with_chat_break = false): Promise<string> {
+	async ask(chat_bot: Model, message: string | Conversation[], options: { purge_thread?: boolean; on_idling?: (index: number) => PromiseLike<void>; on_complete?: (index: number, content: string) => PromiseLike<void> }): Promise<string> {
+		const result = await queue
+			.add(async () => {
+				index++;
+				if (typeof options.on_idling === "function") options.on_idling(index);
+				// wait for 5 seconds, so that it wouldn't get a duplicated output
+				await setTimeout(5000);
+				const content = await this.__ask(chat_bot, message).catch(() => "");
+
+				if (options.purge_thread) {
+					// wait for 3 seconds, so it will not get ratelimit
+					await setTimeout(3000);
+					await this.purge(chat_bot, 50);
+				}
+
+				if (typeof options.on_complete === "function") options.on_complete(index, content);
+				//console.log(`${index}`, [message, content]);
+
+				return content;
+			})
+			.catch(() => {});
+
+		return result ?? "";
+	}
+
+	private async __ask(chat_bot: Model, message: string | Conversation[], with_chat_break = false): Promise<string> {
 		// Wait for the bot to be ready before sending the message
 		if (!this.__is_ready) await this.connect_ws();
 
@@ -324,18 +358,18 @@ class Poe extends EventEmitter {
 				switch (convo.role) {
 					case "model":
 						if (!convo.name) convo.name = this.bots.get(chat_bot)?.displayName ?? "No name";
-						prompt += `[${convo.name} - AI Model]: ${convo.content.trim()}\n\n`;
+						prompt += `[${convo.name} - AI Model]: ${convo.content ? convo.content.trim() : "No context"}\n\n`;
 						break;
 					case "user":
 						if (!convo.name) convo.name = "No name";
-						prompt += `[${convo.name} - User]: ${convo.content.trim()}\n\n`;
+						prompt += `[${convo.name} - User]: ${convo.content ? convo.content.trim() : "No context"}\n\n`;
 						break;
 				}
 			}
 
 			prompt += "\n\n**Latest User Message**:\n\n";
 			const latest = conversation.filter((convo) => convo.role === "user").pop();
-			if (latest) prompt += latest.content.trim() + "\n\n";
+			if (latest) prompt += `${latest.content ? latest.content.trim() : "No context"} \n\n`;
 
 			prompt += "\n\n**Latest AI Model Response**:\n\n";
 
@@ -402,7 +436,7 @@ class Poe extends EventEmitter {
 		if (!this.__bots.has(chat_bot)) throw new Error(`Bot '${chat_bot}' not found`);
 
 		try {
-			console.info(`Purging messages from ${chat_bot}`);
+			// console.info(`Purging messages from ${chat_bot}`);
 
 			// Set up a loop to delete messages in batches of 50
 			let last_messages = (await this.history(chat_bot, 50)).reverse();
@@ -439,4 +473,4 @@ class Poe extends EventEmitter {
 	}
 }
 
-export { Poe };
+export { Poe, Conversation, Model };
