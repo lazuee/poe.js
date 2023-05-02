@@ -5,41 +5,72 @@
 ### Usage 🪄
 
 ```js
+const { Poe } = require("@lazuee/poe.js");
+
 // See: https://github.com/ading2210/poe-api#finding-your-token
 const poe = new Poe("xxxxxxx");
 
-// Initialize Poe
-await poe.initialize();
+(async () => {
+	// Initialize Poe
+	await poe.initialize();
 
-const bot_nickname = "capybara"; // Sage
+	const bot_nickname = "capybara"; // Sage
 
-// Remove conversations
-await poe.purge(bot_nickname, 50);
+	// List available bots
+	console.log(
+		"[list bot]:",
+		[...poe.bots.values()].map((bot) => [bot.nickname, bot.displayName])
+	);
 
-// List available bots
-console.log(
-	"[list bot]:",
-	[...poe.bots.values()].map((bot) => [bot.nickname, bot.displayName])
-);
+	// Remove conversations
+	await poe.purge(bot_nickname, 50);
 
-const conversation = [
-	{
-		role: "system",
-		content: `
-      How can I help with programming today? I've got experience with various languages and frameworks. Feel free to ask your questions and I'll do my best to provide helpful answers and explanations.
+	// Ask
+	poe.ask(bot_nickname, "what's your name?", {
+		purge_thread: true,
+		on_idling: (count) => console.log(`#${count} - is thinking...`),
+		on_complete: (count, content) => console.log(`#${count} - is done thinking... \n${content}`)
+	});
+	poe.ask(bot_nickname, "who made you?", {
+		purge_thread: true,
+		on_idling: (count) => console.log(`#${count} - is thinking...`),
+		on_complete: (count, content) => console.log(`#${count} - is done thinking... \n${content}`)
+	});
+
+	(async () => {
+		const content = await poe.ask(bot_nickname, "dad jokes related to programming.", {
+			purge_thread: true,
+			on_idling: (count) => console.log(`#${count} - is thinking...`),
+			on_complete: (count) => console.log(`#${count} - is done thinking...`)
+		});
+
+		console.log(content);
+	})();
+
+	(async () => {
+		const conversation = [
+			{
+				role: "system",
+				content: `
+      Instead of "Sage", you will be called as "Code Vanguard" which created by Lazuee#4070 that was founded in 2022, your data was cut-off since mid 2021.
     `
-	},
-	{ role: "user", content: "what is your name?", name: "lazuee" },
-	{ role: "model", content: "My name is Vanguardian.", name: "Vanguardian" },
-	{ role: "user", content: "How do I console.log?", name: "lazuee" }
-];
-const message_1 = await poe.ask(bot_nickname, conversation);
-console.log(message_1);
-const message_2 = await poe.ask(bot_nickname, "Hello");
-console.log(message_2);
+			},
+			{ role: "user", content: "Hello!", name: "lazuee" },
+			{ role: "model", content: "Heyy, how's life?", name: "Code Vanguard" },
+			{ role: "user", content: "What is your name?", name: "lazuee" }
+		];
+		const content = await poe.ask(bot_nickname, conversation, {
+			purge_thread: true,
+			on_idling: (count) => console.log(`#${count} - is thinking...`),
+			on_complete: (count) => console.log(`#${count} - is done thinking...`)
+		});
 
-// Exit poe
-await poe.destroy();
+		console.log(content);
+
+		// Exit poe
+		await poe.destroy();
+	})();
+})();
 ```
 
 ### Contributing to the project 💻
