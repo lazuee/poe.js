@@ -16,6 +16,9 @@ dependencies:
   ofetch:
     specifier: ^1.0.1
     version: 1.0.1
+  p-queue-compat:
+    specifier: 1.0.222
+    version: 1.0.222
   ws:
     specifier: ^8.13.0
     version: 8.13.0
@@ -778,6 +781,10 @@ packages:
     resolution: {integrity: sha512-Rfkk/Mp/DL7JVje3u18FxFujQlTNR2q6QfMSMB7AvCBx91NGj/ba3kCfza0f6dVDbw7YlRf/nDrn7pQrCCyQ/w==}
     dev: true
 
+  /eventemitter3@5.0.1:
+    resolution: {integrity: sha512-GWkBvjiSZK87ELrYOSESUYeVIc9mvLLf/nXalMOS5dYrgZq9o5OVkbZAVM06CVxYsCwH9BDZFPlQTlPA1j4ahA==}
+    dev: false
+
   /fast-glob@3.2.12:
     resolution: {integrity: sha512-DVj4CQIYYow0BlaelwK1pHl5n5cRSJfM60UA0zK891sVInoPri2Ekj7+e1CT3/3qxXenpI+nBBmQAcJPJgaj4w==}
     engines: {node: '>=8.6.0'}
@@ -1089,6 +1096,19 @@ packages:
     dependencies:
       wrappy: 1.0.2
     dev: true
+
+  /p-queue-compat@1.0.222:
+    resolution: {integrity: sha512-woUlXnWy2GcakrOiL6mQKcOoLLcp8I0L/3myk+Bs5gBjzy89inUtgPE0yq0CvMrUeEKKLs9XAAz+luS7gXyyNg==}
+    engines: {node: '>=12'}
+    dependencies:
+      eventemitter3: 5.0.1
+      p-timeout-compat: 1.0.3
+    dev: false
+
+  /p-timeout-compat@1.0.3:
+    resolution: {integrity: sha512-Ww0V4y8jy+aIXMn/RHQBB3hUPLJMSReNp1TMiPPUR+IdPI34bgl3vAEWiIjDXgz2rFT6a0c1GiI6A8V69zb+rw==}
+    engines: {node: '>=12'}
+    dev: false
 
   /path-parse@1.0.7:
     resolution: {integrity: sha512-LDJzPVEEEPR+y48z93A0Ed0yXb8pAByGWo/k5YYdYgpY2/2EsOsksJrq7lOHxryrVOn1ejG6oAp8ahvOIQD8sw==}
