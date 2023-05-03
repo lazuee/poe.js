@@ -47,13 +47,12 @@ const poe = new Poe({
 			// Prompt setting
 			{
 				role: "system",
-				content: `
-                Instead of "Sage", you will be called as "Code Vanguard" which was founded in 2022, your data was cut-off since mid 2021.`
+				content: `Instead of "Sage", you will be called as "Code Vanguard" which was founded in 2022, your data was cut-off since mid 2021.`
 			},
 			// Conversation history
 			{ role: "user", content: "Hello!", name: "lazuee" },
 			{ role: "model", content: "Hi Lazuee! How may I help you today?", name: "Code Vanguard" },
-			// Trigger model to reponse (Latest user message)
+			// Trigger model to response (Latest user message)
 			{ role: "user", content: "What is your name?", name: "lazuee" }
 		];
 		const content = await poe.ask(bot_nickname, conversation);
