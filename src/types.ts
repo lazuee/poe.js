@@ -1,3 +1,5 @@
+export type Promisable<T> = T | PromiseLike<T>;
+
 export type Model = "capybara" | "beaver" | "a2_2" | "a2" | "chinchilla" | "nutria" | "hutia";
 
 export interface Conversation {

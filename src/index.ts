@@ -7,7 +7,7 @@ import md5 from "md5";
 import path from "path";
 import WebSocket from "ws";
 
-import type { AvailableBot, ChannelData, ChatOfBotDisplayName, Conversation, DeletionState, Model } from "./types";
+import type { AvailableBot, ChannelData, ChatOfBotDisplayName, Conversation, DeletionState, Model, Promisable } from "./types";
 import EventEmitter from "events";
 import PQueue from "p-queue-compat";
 
@@ -278,7 +278,7 @@ class Poe extends EventEmitter {
 		);
 	}
 
-	async ask(chat_bot: Model, message: string | Conversation[], options?: { purge_thread?: boolean; on_idling?: (index: number) => PromiseLike<void>; on_complete?: (index: number, content: string) => PromiseLike<void> }): Promise<string> {
+	async ask(chat_bot: Model, message: string | Conversation[], options?: { purge_thread?: boolean; on_idling?: (index: number) => Promisable<void>; on_complete?: (index: number, content: string) => Promisable<void> }): Promise<string> {
 		const result = await queue
 			.add(async () => {
 				index++;
