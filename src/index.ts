@@ -11,14 +11,6 @@ import type { AvailableBot, ChannelData, ChatOfBotDisplayName, Conversation, Del
 import EventEmitter from "events";
 import PQueue from "p-queue-compat";
 
-let index = 0;
-
-const queue = new PQueue({ concurrency: 1 });
-queue.on("completed", () => {
-	// reset queue count, if there's no pending queue
-	if (!queue.size) index = 0;
-});
-
 function extractFormKey(html: string) {
 	const scriptRegex = /<script>if\(.+\)throw new Error;(.+)<\/script>/;
 	const scriptText = html.match(scriptRegex)?.[1];
@@ -72,14 +64,32 @@ class Poe extends EventEmitter {
 	private __queries = new Map<string, string>();
 	private __bots = new Map<string, ChatOfBotDisplayName>();
 
-	/**
-	 * @see: https://github.com/ading2210/poe-api#finding-your-token
-	 * @param token your "**p-b**" cookie
-	 */
-	constructor(token: string) {
+	private __queue = new PQueue({ concurrency: 1 });
+	private __queue_count = 0;
+	private __queue_chat_bot = [] as Model[];
+
+	constructor(options: {
+		token: string;
+		purge_conversation?: {
+			enable: boolean;
+			count: number;
+		};
+	}) {
 		super();
 
-		this.__headers.Cookie = "p-b=" + token + "; Domain=poe.com";
+		this.__queue.on("idle", async () => {
+			if (!this.__queue.size) {
+				if (options?.purge_conversation?.enable) {
+					for (const chat_bot of [...new Set(this.__queue_chat_bot)]) {
+						// console.log("purging conversation:", chat_bot);
+						await this.purge(chat_bot, options?.purge_conversation?.count ?? 50).catch(() => {});
+					}
+					this.__queue_chat_bot = [];
+				}
+				this.__queue_count = 0;
+			}
+		});
+		this.__headers.Cookie = "p-b=" + options?.token + "; Domain=poe.com";
 		this.load_queries();
 	}
 
@@ -227,7 +237,11 @@ class Poe extends EventEmitter {
 		const payload = { query, variables };
 		if (queryDisplayName) (payload as any)["queryName"] = queryDisplayName;
 
+		let attempts = 0;
 		while (!result) {
+			if (attempts === 20) throw new Error("Too many attempts.");
+			attempts++;
+
 			try {
 				const headers = {
 					"poe-formkey": this.__formkey ?? "",
@@ -278,32 +292,34 @@ class Poe extends EventEmitter {
 		);
 	}
 
-	async ask(chat_bot: Model, message: string | Conversation[], options?: { purge_thread?: boolean; on_idling?: (index: number) => Promisable<void>; on_complete?: (index: number, content: string) => Promisable<void> }): Promise<string> {
-		const result = await queue
+	async ask(chat_bot: Model, message: string | Conversation[], options?: { on_idling?: (count: number) => Promisable<void>; on_complete?: (count: number, content: string) => Promisable<void> }): Promise<string> {
+		const result = await this.__queue
 			.add(async () => {
-				index++;
-				if (typeof options?.on_idling === "function") options.on_idling(index);
-				// wait for 5 seconds, so that it wouldn't get a duplicated output
-				await setTimeout(5000);
-				const content = await this.__ask(chat_bot, message).catch(() => "");
+				this.__queue_count++;
+				this.__queue_chat_bot.push(chat_bot);
 
-				if (options?.purge_thread) {
-					// wait for 3 seconds, so it will not get ratelimit
-					await setTimeout(3000);
-					await this.purge(chat_bot, 50);
+				if (typeof options?.on_idling === "function") options.on_idling(this.__queue_count);
+
+				let content = "";
+				try {
+					// wait for 5 seconds, so that it wouldn't get a duplicated output
+					await setTimeout(5000);
+					content = await this.__ask(chat_bot, message);
+				} catch (_) {
+					// something went wrong?
+				} finally {
+					if (typeof options?.on_complete === "function") options.on_complete(this.__queue_count, content);
+					//console.log(`${index}`, [message, content]);
+
+					return content;
 				}
-
-				if (typeof options?.on_complete === "function") options.on_complete(index, content);
-				//console.log(`${index}`, [message, content]);
-
-				return content;
 			})
 			.catch(() => {});
 
 		return result ?? "";
 	}
 
-	private async __ask(chat_bot: Model, message: string | Conversation[], with_chat_break = false): Promise<string> {
+	private async __ask(chat_bot: Model, message: string | Conversation[]): Promise<string> {
 		// Wait for the bot to be ready before sending the message
 		if (!this.__is_ready) await this.connect_ws();
 
@@ -359,19 +375,19 @@ class Poe extends EventEmitter {
 			for (let convo of _conversation.filter((c) => c?.role !== "user" || c === conversation[conversation.length - 1])) {
 				switch (convo?.role) {
 					case "model":
-						if (!convo?.name) convo.name = this.bots.get(chat_bot)?.displayName ?? "No name";
-						prompt += `[${convo.name} - AI Model]: ${convo?.content ? convo.content.trim() : "No context"}\n\n`;
+						if (!convo?.name) convo.name = this.bots.get(chat_bot)?.displayName ?? "Unnamed";
+						prompt += `[${convo.name} - AI Model]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
 						break;
 					case "user":
-						if (!convo?.name) convo.name = "No name";
-						prompt += `[${convo.name} - User]: ${convo?.content ? convo.content.trim() : "No context"}\n\n`;
+						if (!convo?.name) convo.name = "Unnamed";
+						prompt += `[${convo.name} - User]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
 						break;
 				}
 			}
 
 			prompt += "\n\n**Latest User Message**:\n\n";
 			const latest = conversation.filter((convo) => convo.role === "user").pop();
-			if (latest) prompt += `${latest.content ? latest.content.trim() : "No context"} \n\n`;
+			if (latest) prompt += `${latest.content ? latest.content.trim() : "No message"} \n\n`;
 
 			prompt += "\n\n**Latest AI Model Response**:\n\n";
 
@@ -383,10 +399,12 @@ class Poe extends EventEmitter {
 			query: typeof message === "object" ? get_prompt(message) : message,
 			chatId: chat_bot_info.chatId,
 			source: null,
-			withChatBreak: with_chat_break
-		}).then((message_data) => {
-			if (!message_data.data?.messageCreateWithStatus?.messageLimit?.canSend) rejectFunc(new Error("Cannot send."));
-		});
+			withChatBreak: false
+		})
+			.then((message_data) => {
+				if (!message_data.data?.messageCreateWithStatus?.messageLimit?.canSend) rejectFunc(new Error("Cannot send."));
+			})
+			.catch((err) => rejectFunc(new Error(err?.message ?? "Something went wrong while requesting.")));
 
 		return promise;
 	}
