@@ -1,7 +1,7 @@
 {
 	"description": "A package for interacting with AI models from poe.com",
 	"name": "@lazuee/poe.js",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"license": "MIT",
 	"sideEffects": false,
 	"type": "module",
