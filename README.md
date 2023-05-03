@@ -39,7 +39,7 @@ const poe = new Poe("xxxxxxx");
 
 	(async () => {
 		const content = await poe.ask(bot_nickname, "dad jokes related to programming.", {
-			purge_thread: true,
+			purge_thread: false,
 			on_idling: (count) => console.log(`#${count} - is thinking...`),
 			on_complete: (count) => console.log(`#${count} - is done thinking...`)
 		});
@@ -59,11 +59,7 @@ const poe = new Poe("xxxxxxx");
 			{ role: "model", content: "Heyy, how's life?", name: "Code Vanguard" },
 			{ role: "user", content: "What is your name?", name: "lazuee" }
 		];
-		const content = await poe.ask(bot_nickname, conversation, {
-			purge_thread: true,
-			on_idling: (count) => console.log(`#${count} - is thinking...`),
-			on_complete: (count) => console.log(`#${count} - is done thinking...`)
-		});
+		const content = await poe.ask(bot_nickname, conversation);
 
 		console.log(content);
 
