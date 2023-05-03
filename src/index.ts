@@ -278,22 +278,22 @@ class Poe extends EventEmitter {
 		);
 	}
 
-	async ask(chat_bot: Model, message: string | Conversation[], options: { purge_thread?: boolean; on_idling?: (index: number) => PromiseLike<void>; on_complete?: (index: number, content: string) => PromiseLike<void> }): Promise<string> {
+	async ask(chat_bot: Model, message: string | Conversation[], options?: { purge_thread?: boolean; on_idling?: (index: number) => PromiseLike<void>; on_complete?: (index: number, content: string) => PromiseLike<void> }): Promise<string> {
 		const result = await queue
 			.add(async () => {
 				index++;
-				if (typeof options.on_idling === "function") options.on_idling(index);
+				if (typeof options?.on_idling === "function") options.on_idling(index);
 				// wait for 5 seconds, so that it wouldn't get a duplicated output
 				await setTimeout(5000);
 				const content = await this.__ask(chat_bot, message).catch(() => "");
 
-				if (options.purge_thread) {
+				if (options?.purge_thread) {
 					// wait for 3 seconds, so it will not get ratelimit
 					await setTimeout(3000);
 					await this.purge(chat_bot, 50);
 				}
 
-				if (typeof options.on_complete === "function") options.on_complete(index, content);
+				if (typeof options?.on_complete === "function") options.on_complete(index, content);
 				//console.log(`${index}`, [message, content]);
 
 				return content;
@@ -345,24 +345,26 @@ class Poe extends EventEmitter {
 		const get_prompt = (conversation: Conversation[]) => {
 			let prompt = "";
 			const prompt_settings = [];
+			const _conversation = [];
 
 			for (const convo of conversation) {
 				if (convo.role === "system") prompt_settings.push(convo.content.trim());
+				else _conversation.push(convo);
 			}
 
 			prompt += "**Prompt Settings**:\n\n";
 			prompt += prompt_settings.join("\n\n") + "\n\n";
 
 			prompt += "\n\n**Conversation History**:\n\n";
-			for (let convo of conversation.filter((c) => c.role !== "user" || c === conversation[conversation.length - 1])) {
-				switch (convo.role) {
+			for (let convo of _conversation.filter((c) => c?.role !== "user" || c === conversation[conversation.length - 1])) {
+				switch (convo?.role) {
 					case "model":
-						if (!convo.name) convo.name = this.bots.get(chat_bot)?.displayName ?? "No name";
-						prompt += `[${convo.name} - AI Model]: ${convo.content ? convo.content.trim() : "No context"}\n\n`;
+						if (!convo?.name) convo.name = this.bots.get(chat_bot)?.displayName ?? "No name";
+						prompt += `[${convo.name} - AI Model]: ${convo?.content ? convo.content.trim() : "No context"}\n\n`;
 						break;
 					case "user":
-						if (!convo.name) convo.name = "No name";
-						prompt += `[${convo.name} - User]: ${convo.content ? convo.content.trim() : "No context"}\n\n`;
+						if (!convo?.name) convo.name = "No name";
+						prompt += `[${convo.name} - User]: ${convo?.content ? convo.content.trim() : "No context"}\n\n`;
 						break;
 				}
 			}
