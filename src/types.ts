@@ -1,6 +1,6 @@
 export type Promisable<T> = T | PromiseLike<T>;
 
-export type Model = "capybara" | "beaver" | "a2_2" | "a2" | "chinchilla" | "nutria" | "hutia";
+export type Prompt = string | Conversation[];
 
 export interface Conversation {
 	role: "user" | "system" | "model";
