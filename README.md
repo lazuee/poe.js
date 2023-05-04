@@ -11,7 +11,10 @@ const poe = new Poe({
 	// See: https://github.com/ading2210/poe-api#finding-your-token
 	token: "xxxxxx",
 
-	// Purge conversation when there's no pending request on ask
+	// Chatbot name
+	bot_name: "Sage",
+
+	// Clears the conversation if there are no pending requests on the "ask" function.
 	purge_conversation: {
 		enable: true, // default: false
 		count: 100 // default: 50
@@ -19,22 +22,15 @@ const poe = new Poe({
 });
 
 (async () => {
-	// Initialize Poe
-	await poe.initialize();
-
-	const bot_nickname = "capybara"; // Sage
-
-	// List available bots
-	console.log(`List of Chatbot:\n${[...poe.bots.values()].map((bot) => `- [${bot.nickname}] ${bot.displayName}`).join("\n")}\n`);
-
-	// Ask
-	poe.ask(bot_nickname, "What's your name?", {
+	// Ask, The function adds a request to a queue and waits for its turn to be executed.
+	// I added queue to prevent duplicated response, when sending request on chatbot.
+	poe.ask("What's your name?", {
 		on_idling: (count) => console.log(`#${count} - task running...`),
 		on_complete: (count, content) => console.log(`#${count} - task completed. \n#1 result: ${content}\n`)
 	});
 
 	(async () => {
-		const content = await poe.ask(bot_nickname, "Dad joke related to programming.", {
+		const content = await poe.ask("Dad joke related to programming.", {
 			on_idling: (count) => console.log(`#${count} - task running...`),
 			on_complete: (count) => console.log(`#${count} - task completed.`)
 		});
@@ -56,26 +52,14 @@ const poe = new Poe({
 			// Trigger model to reponse (Latest user message)
 			{ role: "user", content: "What is your name?", name: "lazuee" }
 		];
-		const content = await poe.ask(bot_nickname, conversation);
+		const content = await poe.ask(conversation);
 
 		console.log(`#3 result: ${content}\n`);
-
-		// Exit poe
-		await poe.destroy();
 	})();
 })();
 
 /*
 Output:
-List of Chatbot:
-- [capybara] Sage
-- [beaver] GPT-4
-- [a2_2] Claude+
-- [a2] Claude-instant
-- [chinchilla] ChatGPT
-- [hutia] NeevaAI
-- [nutria] Dragonfly
-
 #1 - task running...
 #1 - task completed.
 #1 result: My name is Sage.
