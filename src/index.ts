@@ -364,7 +364,9 @@ class Poe {
 					if (message_data.message_type !== "subscriptionUpdate") continue;
 
 					const message = message_data.payload?.data?.messageAdded;
-					if (!message) reject(new Error("Added message is empty."));
+					// Looks like this is unnecessary, cu'z it will continue until the messate state is 'complete'
+					// Just uncomment this via node_modules if you want to throw error if message got null (means you're too fast or the bot is too fast, that's why the message got null.)
+					// if (!message) reject(new Error("Added message is empty."));
 
 					if (message?.author !== "human" && message?.state === "complete") {
 						return resolve(message.text);
