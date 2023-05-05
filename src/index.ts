@@ -385,7 +385,7 @@ class Poe {
 			const result = await this.request("ChatListPaginationQuery", {
 				count,
 				cursor,
-				id: this.__bot.defaultBotObject.nickname
+				id: this.__bot.id
 			});
 
 			const messages = result?.data?.node?.messagesConnection?.edges;
@@ -422,7 +422,7 @@ class Poe {
 
 	async purge(count: number = -1) {
 		try {
-			// console.info(`Purging messages from ${chat_bot}`);
+			// console.info(`Purging messages from ${this.__bot.defaultBotObject.displayName}`);
 
 			// Set up a loop to delete messages in batches of 50
 			let last_messages = (await this.history(50)).reverse();
