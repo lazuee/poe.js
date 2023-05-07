@@ -64,10 +64,12 @@ class Poe {
 	private __queue_count = 0;
 
 	private __bot_name: string;
-	private __bot!: ChatOfBotDisplayName;
+	private __bot?: ChatOfBotDisplayName;
+
+	private __poe_tokens = [] as string[];
 
 	constructor(options: {
-		token: string;
+		tokens: string[];
 		bot_name: string;
 		purge_conversation?: {
 			enable: boolean;
@@ -84,7 +86,7 @@ class Poe {
 			}
 		});
 		this.__bot_name = options?.bot_name;
-		this.__headers.Cookie = "p-b=" + options?.token + "; Domain=poe.com";
+		this.__poe_tokens = options?.tokens ?? [];
 		this.load_queries();
 	}
 
@@ -106,14 +108,33 @@ class Poe {
 	}
 
 	private async init(): Promise<void> {
+		// Return if still has formkey
 		if (this.__formkey) return;
+
+		// Add the token to headers cookie
+		this.__headers.Cookie = "p-b=" + this.__poe_tokens[0] + "; Domain=poe.com";
 
 		// Fetch the home page and extract the form key and next data
 		const html = await ofetch(this.__urls.home, {
 			headers: this.__headers,
 			parseResponse: (str) => str
 		}).catch(() => null);
-		if (!html) throw new Error("You've got ratelimit.");
+		if (!html) {
+			// Got ratelimit, delete existing values
+			delete this.__formkey;
+			delete this.__channel_data;
+			delete this.__bot;
+
+			// Move the ratelimit token to the last
+			const got_ratelimit_token = this.__poe_tokens[0];
+			const index = this.__poe_tokens.indexOf(got_ratelimit_token);
+			if (index > -1) {
+				this.__poe_tokens.splice(index, 1);
+				this.__poe_tokens.push(got_ratelimit_token);
+			}
+
+			throw new Error("You've got ratelimit.");
+		}
 
 		const json_regex = /<script id="__NEXT_DATA__" type="application\/json">(.+?)<\/script>/;
 		const json_text = json_regex.exec(html)?.[1] ?? "";
@@ -231,29 +252,6 @@ class Poe {
 		return result;
 	}
 
-	async subscribe() {
-		await this.request(
-			"SubscriptionsMutation",
-			{
-				subscriptions: [
-					{
-						subscriptionName: "messageAdded",
-						query: this.__queries.get("MessageAddedSubscription")
-					},
-					{
-						subscriptionName: "viewerStateUpdated",
-						query: this.__queries.get("ViewerStateUpdatedSubscription")
-					},
-					{
-						subscriptionName: "viewerMessageLimitUpdated",
-						query: this.__queries.get("ViewerMessageLimitUpdatedSubscription")
-					}
-				]
-			},
-			"subscriptionsMutation"
-		);
-	}
-
 	async ask(prompt: Prompt, options?: { on_idling?: (count: number) => Promisable<void>; on_complete?: (count: number, response: string) => Promisable<void> }): Promise<string> {
 		const result = await this.__queue.add(async () => {
 			this.__queue_count++;
@@ -294,6 +292,29 @@ class Poe {
 		return result ?? "";
 	}
 
+	private async subscribe() {
+		await this.request(
+			"SubscriptionsMutation",
+			{
+				subscriptions: [
+					{
+						subscriptionName: "messageAdded",
+						query: this.__queries.get("MessageAddedSubscription")
+					},
+					{
+						subscriptionName: "viewerStateUpdated",
+						query: this.__queries.get("ViewerStateUpdatedSubscription")
+					},
+					{
+						subscriptionName: "viewerMessageLimitUpdated",
+						query: this.__queries.get("ViewerMessageLimitUpdatedSubscription")
+					}
+				]
+			},
+			"subscriptionsMutation"
+		);
+	}
+
 	private async send_message(prompt: Prompt) {
 		const get_prompt = (conversation: Conversation[]) => {
 			const prompt_settings = [];
@@ -301,6 +322,7 @@ class Poe {
 			for (const convo of conversation) if (convo.role === "system") prompt_settings.push(convo.content.trim());
 			conversation = conversation.filter((convo) => convo.role !== "system");
 			const latest = conversation.filter((convo) => convo.role === "user").pop();
+			if (latest) conversation = conversation.filter((convo) => convo !== latest);
 
 			prompt = "";
 			prompt += "**Prompt Settings**:\n\n";
@@ -309,7 +331,7 @@ class Poe {
 
 			prompt += "\n\n**Conversation History**:\n\n";
 
-			for (let convo of conversation.filter((c) => c?.role !== "user" || c === conversation[conversation.length - 1])) {
+			for (let convo of conversation) {
 				switch (convo?.role) {
 					case "model":
 						if (!convo?.name) convo.name = this.__bot_name;
@@ -334,9 +356,9 @@ class Poe {
 
 		return new Promise((resolve, reject) => {
 			this.request("AddHumanMessageMutation", {
-				bot: this.__bot.defaultBotObject.nickname,
+				bot: this.__bot?.defaultBotObject.nickname,
 				query: typeof prompt === "object" ? get_prompt(prompt) : prompt,
-				chatId: this.__bot.chatId,
+				chatId: this.__bot?.chatId,
 				source: null,
 				withChatBreak: false
 			})
@@ -387,7 +409,7 @@ class Poe {
 			const result = await this.request("ChatListPaginationQuery", {
 				count,
 				cursor,
-				id: this.__bot.id
+				id: this.__bot?.id
 			});
 
 			const messages = result?.data?.node?.messagesConnection?.edges;
