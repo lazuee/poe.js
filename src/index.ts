@@ -82,10 +82,11 @@ class Poe {
 
 			if (!this.__queue.pending) {
 				if (options?.purge_conversation?.enable) {
-					console.info(`[${options?.token}] purging conversation in`, this.__bot_name);
-					await this.purge(options?.purge_conversation?.count ?? 50).catch(() => {});
-					await this.break_message();
+					//console.info(`[${options?.token}] purging conversation in`, this.__bot_name);
+					await this.purge(options?.purge_conversation?.count ?? 0).catch(() => {});
 				}
+
+				await this.break_message();
 				this.__queue_pending = 0;
 			}
 		});
