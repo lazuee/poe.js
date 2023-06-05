@@ -8,7 +8,7 @@ import md5 from "md5";
 import path from "path";
 import WebSocket from "ws";
 
-import type { AvailableBot, ChannelData, ChatOfBotDisplayName, Conversation, Promisable, Prompt } from "./types";
+import type { Conversation, Promisable, Prompt } from "./types";
 import PQueue from "p-queue-compat";
 
 function extractFormKey(html: string) {
@@ -55,21 +55,22 @@ class Poe {
 		Connection: "keep-alive"
 	};
 
+	private __ws?: WebSocket;
 	private __ws_domain = `tch${Math.floor(Math.random() * 1e6)}`;
 	private __formkey?: string;
-	private __channel_data?: ChannelData;
+	private __channel_data?: Record<string, any>;
 	private __queries = new Map<string, string>();
 
 	private __queue = new PQueue({ concurrency: 1 });
-	private __queue_count = 0;
+	private __queue_pending = 0;
 
 	private __bot_name: string;
-	private __bot?: ChatOfBotDisplayName;
+	private __bot?: Record<string, any>;
 
-	private __poe_tokens = [] as string[];
+	private __poe_token: string;
 
 	constructor(options: {
-		tokens: string[];
+		token: string;
 		bot_name: string;
 		purge_conversation?: {
 			enable: boolean;
@@ -77,16 +78,19 @@ class Poe {
 		};
 	}) {
 		this.__queue.on("idle", async () => {
-			if (!this.__queue.size) {
+			await new Promise((res) => setTimeout(res, 5 * 1000));
+
+			if (!this.__queue.pending) {
 				if (options?.purge_conversation?.enable) {
-					// console.info("purging conversation in", this.__bot_name);
+					console.info(`[${options?.token}] purging conversation in`, this.__bot_name);
 					await this.purge(options?.purge_conversation?.count ?? 50).catch(() => {});
+					await this.break_message();
 				}
-				this.__queue_count = 0;
+				this.__queue_pending = 0;
 			}
 		});
 		this.__bot_name = options?.bot_name;
-		this.__poe_tokens = options?.tokens ?? [];
+		this.__poe_token = options?.token;
 		this.load_queries();
 	}
 
@@ -107,76 +111,86 @@ class Poe {
 		}
 	}
 
+	get queue() {
+		return this.__queue;
+	}
+
+	get pending() {
+		return this.__queue_pending;
+	}
+
 	private async init(): Promise<void> {
 		// Return if still has formkey
-		if (this.__formkey) return;
+		if (this.__formkey && this.__bot) return;
 
 		// Add the token to headers cookie
-		this.__headers.Cookie = "p-b=" + this.__poe_tokens[0] + "; Domain=poe.com";
+		this.__headers.Cookie = "p-b=" + this.__poe_token + "; Domain=poe.com";
 
 		// Fetch the home page and extract the form key and next data
-		const html = await ofetch(this.__urls.home, {
-			headers: this.__headers,
-			parseResponse: (str) => str
-		}).catch(() => null);
-		if (!html) {
-			// Got ratelimit, delete existing values
-			delete this.__formkey;
-			delete this.__channel_data;
-			delete this.__bot;
+		let status = 0,
+			html = "";
 
-			// Move the ratelimit token to the last
-			const got_ratelimit_token = this.__poe_tokens[0];
-			const index = this.__poe_tokens.indexOf(got_ratelimit_token);
-			if (index > -1) {
-				this.__poe_tokens.splice(index, 1);
-				this.__poe_tokens.push(got_ratelimit_token);
+		await ofetch(this.__urls.home, {
+			headers: this.__headers,
+			onResponse: ({ response }) => {
+				// console.log(response.status, "html");
+				status = response.status;
+				html = response._data;
 			}
+		}).catch(() => {});
 
-			throw new Error("You've got ratelimit.");
-		}
+		switch (status) {
+			case 403: {
+				// Got ratelimit, delete existing values
+				delete this.__formkey;
+				delete this.__channel_data;
+				delete this.__bot;
 
-		const json_regex = /<script id="__NEXT_DATA__" type="application\/json">(.+?)<\/script>/;
-		const json_text = json_regex.exec(html)?.[1] ?? "";
-		const next_data = JSON.parse(json_text);
-		this.__formkey = extractFormKey(html);
+				throw new Error("Token got ratelimit");
+			}
+			case 200: {
+				const json_regex = /<script id="__NEXT_DATA__" type="application\/json">(.+?)<\/script>/;
+				const json_text = json_regex.exec(html)?.[1] ?? "";
+				const next_data = JSON.parse(json_text);
+				this.__formkey = extractFormKey(html);
 
-		const available_bots = next_data.props?.pageProps?.payload?.viewer?.availableBots as AvailableBot[];
+				const bot_list = next_data.props?.pageProps?.payload?.viewer?.viewerBotList as Record<string, any>[];
+				if (!bot_list)
+					// Check if the token is valid
+					throw new Error("Invalid token.");
 
-		// Check if the token is valid
-		if (!available_bots) throw new Error("Invalid token.");
+				// Fetch the channel data from the settings page
+				const settings = await ofetch<{ tchannelData: Record<string, any> }>(this.__urls.settings, {
+					headers: this.__headers,
+					parseResponse: JSON.parse
+				});
+				this.__channel_data = settings.tchannelData;
 
-		// Fetch the channel data from the settings page
-		const settings = await ofetch<{ tchannelData: ChannelData }>(this.__urls.settings, {
-			headers: this.__headers,
-			parseResponse: JSON.parse
-		});
-		this.__channel_data = settings.tchannelData;
+				// Fetch bot data
+				this.__bot = await new Promise((resolve, reject) => {
+					(async () => {
+						while (true) {
+							await ofetch(`https://poe.com/_next/data/${next_data.buildId}/${this.__bot_name}.json`, {
+								headers: this.__headers,
+								onResponse: ({ response }) => {
+									if (response.status !== 200) return;
+									resolve(response._data?.pageProps?.payload?.chatOfBotDisplayName as Record<string, any>);
+								}
+							}).catch(() => reject(new Error("Invalid Bot name")));
 
-		// Fetch the chat data for each available bot
-		for (const bot of available_bots.filter((bot) => bot.deletionState === "not_deleted")) {
-			if (bot.displayName.toLocaleLowerCase() === this.__bot_name.toLocaleLowerCase()) {
-				const url = `https://poe.com/_next/data/${next_data.buildId}/${bot.displayName}.json`;
-				let chat_data: ChatOfBotDisplayName | undefined;
+							await new Promise((res) => setTimeout(res, 5 * 1000));
+						}
+					})();
+				});
 
-				while (!chat_data) {
-					try {
-						const data = await ofetch(url, {
-							headers: this.__headers,
-							parseResponse: JSON.parse
-						});
-						chat_data = data.pageProps.payload.chatOfBotDisplayName as ChatOfBotDisplayName;
-						this.__bot = chat_data;
-					} catch (error) {
-						// console.warn(`Failed to fetch chat data for bot '${bot.displayName}'. Retrying in 5 seconds...`);
-						await new Promise((resolve) => setTimeout(resolve, 5 * 1000));
-					}
-				}
+				return;
+			}
+			default:
 				break;
-			}
 		}
 
-		if (!this.__bot) throw new Error("Invalid bot name.");
+		await new Promise((resolve) => setTimeout(resolve, 5 * 1000));
+		return await this.init();
 	}
 
 	private async connect_ws(): Promise<WebSocket> {
@@ -195,15 +209,18 @@ class Poe {
 		});
 	}
 
-	private async disconnect_ws(ws: WebSocket) {
+	private async disconnect_ws() {
 		return new Promise((resolve, reject) => {
-			ws.onclose = () => {
-				// console.info("Websocket now closed.");
+			if (!this.__ws) return resolve(true);
+
+			this.__ws.onclose = () => {
+				console.info("Websocket closed.");
+				delete this.__ws;
 				resolve(true);
 			};
 
 			try {
-				ws.close();
+				this.__ws.close();
 			} catch (error) {
 				reject(error);
 			}
@@ -252,44 +269,104 @@ class Poe {
 		return result;
 	}
 
-	async ask(prompt: Prompt, options?: { on_idling?: (count: number) => Promisable<void>; on_complete?: (count: number, response: string) => Promisable<void> }): Promise<string> {
-		const result = await this.__queue.add(async () => {
-			this.__queue_count++;
+	async send_message(prompt: Prompt, options?: { on_idling?: () => Promisable<void>; on_typing?: (response: string) => Promisable<void> }): Promise<string> {
+		this.__queue_pending++;
 
-			if (typeof options?.on_idling === "function") options.on_idling(this.__queue_count);
+		const result = await this.__queue.add(async () => {
+			if (typeof options?.on_idling === "function") options.on_idling();
 
 			let response = "",
-				ws = undefined as unknown as WebSocket,
 				error = undefined as unknown as Error;
 
 			try {
 				await this.init();
 
-				const timeout = setTimeout(async () => {
-					await this.disconnect_ws(ws);
-					error = new Error("Got timeout while waiting for bot response.");
-				}, 2 * 60 * 1000);
-
-				ws = await this.connect_ws();
+				const timeout = setTimeout(() => {
+					response = "[timeout]";
+					this.disconnect_ws();
+				}, 3 * 60 * 1000);
+				if (!this.__ws) this.__ws = await this.connect_ws();
 				await this.subscribe();
-				this.send_message(prompt);
 
-				response = await this.get_message(ws);
+				const get_prompt = (conversation: Conversation[]) => {
+					const prompt_settings = [];
+
+					for (const convo of conversation) if (convo.role === "system") prompt_settings.push(convo.content.trim());
+					conversation = conversation.filter((convo) => convo.role !== "system");
+					const latest = conversation.filter((convo) => convo.role === "user").pop();
+					if (latest) conversation = conversation.filter((convo) => convo !== latest);
+
+					prompt = "";
+					prompt += "**Prompt Settings**:\n\n";
+					prompt += prompt_settings.join("\n\n") + "\n\n";
+					prompt = prompt.trim();
+
+					prompt += "\n\n**Conversation History**:\n\n";
+
+					for (let convo of conversation) {
+						switch (convo?.role) {
+							case "model":
+								if (!convo?.name) convo.name = this.__bot_name;
+								prompt += `[${convo.name} - AI Model]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
+								break;
+							case "user":
+								if (!convo?.name) convo.name = "Unnamed";
+								prompt += `[${convo.name} - User]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
+								break;
+						}
+					}
+					prompt = prompt.trim();
+
+					prompt += "\n\n**Latest User Message**:\n\n";
+					if (latest) prompt += `${latest.content ? latest.content.trim() : "No message"}\n\n`;
+					prompt = prompt.trim();
+
+					prompt += "\n\n**Latest AI Model Response**:";
+
+					return prompt.trim();
+				};
+
+				this.request("AddHumanMessageMutation", {
+					bot: this.__bot?.defaultBotObject.nickname,
+					query: typeof prompt === "object" ? get_prompt(prompt) : prompt,
+					chatId: this.__bot?.chatId,
+					source: null,
+					withChatBreak: false
+				});
+
+				await this.get_message((text) => {
+					response = text;
+					if (typeof options?.on_typing === "function") options.on_typing(text);
+				});
+
 				clearTimeout(timeout);
 			} catch (err: any) {
 				error = err?.stack ? err : new Error("Something went wrong while waiting for bot response.");
 			} finally {
-				if (ws) await this.disconnect_ws(ws);
-				// wait 2.5 secs to prevent duplicated response
-				await new Promise((resolve) => setTimeout(resolve, 2.5 * 1000));
+				this.__queue_pending--;
+				if (typeof response === "string" && response.length > 1 && response !== "[timeout]") {
+					await new Promise((resolve) => setTimeout(resolve, 3 * 1000));
+					if (error) throw error;
+					return response;
+				}
 
-				if (typeof options?.on_complete === "function") options.on_complete(this.__queue_count, response);
-				if (error) throw error;
-				return response;
+				await this.break_message();
+				await this.disconnect_ws();
+				console.log("[ask] response is empty, trying again,..");
+				return await this.send_message(prompt, options);
 			}
 		});
 
 		return result ?? "";
+	}
+
+	async break_message() {
+		const result = await this.request("AddMessageBreakMutation", {
+			chatId: this.__bot?.chatId
+		});
+
+		console.log(result.data);
+		return result?.data?.messageBreakCreate?.message;
 	}
 
 	private async subscribe() {
@@ -315,90 +392,45 @@ class Poe {
 		);
 	}
 
-	private async send_message(prompt: Prompt) {
-		const get_prompt = (conversation: Conversation[]) => {
-			const prompt_settings = [];
-
-			for (const convo of conversation) if (convo.role === "system") prompt_settings.push(convo.content.trim());
-			conversation = conversation.filter((convo) => convo.role !== "system");
-			const latest = conversation.filter((convo) => convo.role === "user").pop();
-			if (latest) conversation = conversation.filter((convo) => convo !== latest);
-
-			prompt = "";
-			prompt += "**Prompt Settings**:\n\n";
-			prompt += prompt_settings.join("\n\n") + "\n\n";
-			prompt = prompt.trim();
-
-			prompt += "\n\n**Conversation History**:\n\n";
-
-			for (let convo of conversation) {
-				switch (convo?.role) {
-					case "model":
-						if (!convo?.name) convo.name = this.__bot_name;
-						prompt += `[${convo.name} - AI Model]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
-						break;
-					case "user":
-						if (!convo?.name) convo.name = "Unnamed";
-						prompt += `[${convo.name} - User]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
-						break;
-				}
-			}
-			prompt = prompt.trim();
-
-			prompt += "\n\n**Latest User Message**:\n\n";
-			if (latest) prompt += `${latest.content ? latest.content.trim() : "No message"}\n\n`;
-			prompt = prompt.trim();
-
-			prompt += "\n\n**Latest AI Model Response**:";
-
-			return prompt.trim();
-		};
-
+	private async get_message(on_typing?: (text: string) => void) {
 		return new Promise((resolve, reject) => {
-			this.request("AddHumanMessageMutation", {
-				bot: this.__bot?.defaultBotObject.nickname,
-				query: typeof prompt === "object" ? get_prompt(prompt) : prompt,
-				chatId: this.__bot?.chatId,
-				source: null,
-				withChatBreak: false
-			})
-				.then((message_data) => {
-					if (!message_data.data?.messageCreateWithStatus?.messageLimit?.canSend) reject(new Error("Cannot send."));
-					resolve(true);
-				})
-				.catch((error) => {
-					reject(error);
-				});
-		});
-	}
+			if (!this.__ws) return reject(new Error("Websocket is null"));
 
-	private async get_message(ws: WebSocket): Promise<string> {
-		return new Promise((resolve, reject) => {
-			ws.onmessage = (e) => {
-				const data = JSON.parse(e.data.toString());
+			let completed = false;
+			const onMessage = (data: any) => {
+				const { messages } = JSON.parse(data.toString()) ?? {};
 				// Return early if the data does not contain any messages
-				if (!Array.isArray(data.messages)) return;
+				if (!Array.isArray(messages)) return;
 
-				for (const message_str of data.messages) {
+				for (const message_str of messages) {
 					const message_data = JSON.parse(message_str);
 
 					// Skip messages that are not subscription updates
 					if (message_data.message_type !== "subscriptionUpdate") continue;
 
 					const message = message_data.payload?.data?.messageAdded;
-					// Looks like this is unnecessary, cu'z it will continue until the messate state is 'complete'
-					// Just uncomment this via node_modules if you want to throw error if message got null (means you're too fast or the bot is too fast, that's why the message got null.)
-					// if (!message) reject(new Error("Added message is empty."));
+					if (message?.author === "human") return;
 
-					if (message?.author !== "human" && message?.state === "complete") {
-						return resolve(message.text);
+					if (message?.state !== "complete") {
+						if (typeof message?.text === "string" && message?.text.length > 1) {
+							if (typeof on_typing === "function") on_typing(message.text);
+						}
+					} else {
+						if (completed) return;
+						completed = true;
+
+						this.__ws?.removeListener("message", onMessage);
+						resolve(true);
 					}
 				}
 			};
-			ws.onclose = () => {
-				// console.info("Websocket got timeout");
-				reject(new Error("You've reached the timeout, your request has been dismissed."));
+			this.__ws.on("message", onMessage);
+
+			const onError = (error: Error) => {
+				this.__ws?.removeListener("error", onError);
+				reject(error);
 			};
+			this.__ws.on("error", onError);
 		});
 	}
 
