@@ -13,24 +13,22 @@ const { Poe } = require("../");
 	}
 
 	async function send_message(...args) {
-		return new Promise((resolve, reject) =>
-			setTimeout(() => {
-				for (const poe of [...poes.values()]) {
-					if (!poe.pending)
-						return poe
-							.send_message(...args)
-							.then(resolve)
-							.catch(reject);
-				}
-
-				for (const poe of [...poes.values()].sort((a, b) => a.pending - b.pending)) {
+		return new Promise((resolve, reject) => {
+			for (const poe of [...poes.values()]) {
+				if (!poe.pending)
 					return poe
 						.send_message(...args)
 						.then(resolve)
 						.catch(reject);
-				}
-			}, Math.floor(Math.random() * 401) + 100)
-		);
+			}
+
+			for (const poe of [...poes.values()].sort((a, b) => a.pending - b.pending)) {
+				return poe
+					.send_message(...args)
+					.then(resolve)
+					.catch(reject);
+			}
+		});
 	}
 
 	// Ask, The function adds a request to a queue and waits for its turn to be executed.
