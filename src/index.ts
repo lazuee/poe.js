@@ -211,6 +211,8 @@ class Poe {
 	}
 
 	private async disconnect_ws() {
+		await this.break_message();
+
 		return new Promise((resolve, reject) => {
 			if (!this.__ws) return resolve(true);
 
@@ -345,15 +347,15 @@ class Poe {
 				error = err?.stack ? err : new Error("Something went wrong while waiting for bot response.");
 			} finally {
 				this.__queue_pending--;
+				if (error) throw error;
+
 				if (typeof response === "string" && response.length > 1 && response !== "[timeout]") {
 					await new Promise((resolve) => setTimeout(resolve, 3 * 1000));
-					if (error) throw error;
 					return response;
 				}
 
-				await this.break_message();
 				await this.disconnect_ws();
-				console.log("[ask] response is empty, trying again,..");
+				// console.log("[ask] response is empty, trying again,..");
 				return await this.send_message(prompt, options);
 			}
 		});
@@ -366,7 +368,6 @@ class Poe {
 			chatId: this.__bot?.chatId
 		});
 
-		console.log(result.data);
 		return result?.data?.messageBreakCreate?.message;
 	}
 
