@@ -7,11 +7,18 @@ const { Poe } = require("../");
 	for (const token of tokens) {
 		const poe = new Poe({
 			token: token,
-			bot_name: "Sage"
+			bot_name: "Sage",
+			// purge conversation by message count, once the queue has been emptied.
+			purge_conversation: {
+				enable: true,
+				count: 0 // By default: 0, there are no messages to be purged.
+			}
 		});
 		poes.set(token, poe);
 	}
 
+	// This function adds a request to a queue and waits for its turn to be executed.
+	// The queue is implemented to prevent duplicated responses when sending requests to the chatbot.
 	async function send_message(...args) {
 		return new Promise((resolve, reject) => {
 			for (const poe of [...poes.values()]) {
@@ -66,7 +73,7 @@ const { Poe } = require("../");
 		console.log(`#3 result: ${content}\n`);
 	});
 
-	send_message("shit", {
+	send_message("How are you?", {
 		on_idling: () => console.log(`#4 - task running...`)
 		//on_typing: (text) => console.log(`#4 - ${text}`)
 	}).then((content) => {

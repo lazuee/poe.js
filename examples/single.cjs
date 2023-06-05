@@ -3,15 +3,16 @@ const { Poe } = require("../");
 const poe = new Poe({
 	token: "",
 	bot_name: "Sage",
+	// purge conversation by message count, once the queue has been emptied.
 	purge_conversation: {
 		enable: true,
-		count: 0
+		count: 0 // By default: 0, there are no messages to be purged.
 	}
 });
 
 (async () => {
-	// The function adds a request to a queue and waits for its turn to be executed.
-	// I added queue to prevent duplicated response, when sending request on chatbot.
+	// This function adds a request to a queue and waits for its turn to be executed.
+	// The queue is implemented to prevent duplicated responses when sending requests to the chatbot.
 	poe.send_message("What's your name?", {
 		on_idling: () => console.log(`#1 - task running...`)
 		///on_typing: (text) => console.log(`#1 - ${text}`)
