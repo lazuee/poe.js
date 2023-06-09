@@ -275,7 +275,7 @@ class Poe {
 		this.__queue_pending++;
 
 		const result = await this.__queue.add(async () => {
-			if (typeof options?.on_idling === "function") options.on_idling();
+			if (typeof options?.on_idling === "function") await options.on_idling();
 
 			let response = "",
 				error = undefined as unknown as Error;
