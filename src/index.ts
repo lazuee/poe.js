@@ -155,8 +155,7 @@ class Poe {
 				const next_data = JSON.parse(json_text);
 				this.__formkey = extractFormKey(html);
 
-				const bot_list = next_data.props?.pageProps?.payload?.viewer?.viewerBotList as Record<string, any>[];
-				if (!bot_list)
+				if (!next_data.props?.pageProps?.payload?.viewer?.uid)
 					// Check if the token is valid
 					throw new Error("Invalid token.");
 
