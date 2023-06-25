@@ -1,7 +1,7 @@
 mutation AutoSubscriptionMutation($subscriptions: [AutoSubscriptionQuery!]!) {
-	autoSubscribe(subscriptions: $subscriptions) {
-		viewer {
-			id
-		}
-	}
+    autoSubscribe(subscriptions: $subscriptions) {
+        viewer {
+            id
+        }
+    }
 }

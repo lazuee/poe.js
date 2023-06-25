@@ -1,5 +1,13 @@
-mutation SignupWithVerificationCodeMutation($verificationCode: String!, $emailAddress: String, $phoneNumber: String) {
-	signupWithVerificationCode(verificationCode: $verificationCode, emailAddress: $emailAddress, phoneNumber: $phoneNumber) {
-		status
-	}
+mutation SignupWithVerificationCodeMutation(
+    $verificationCode: String!
+    $emailAddress: String
+    $phoneNumber: String
+) {
+    signupWithVerificationCode(
+        verificationCode: $verificationCode
+        emailAddress: $emailAddress
+        phoneNumber: $phoneNumber
+    ) {
+        status
+    }
 }

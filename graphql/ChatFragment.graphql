@@ -1,6 +1,6 @@
 fragment ChatFragment on Chat {
-	id
-	chatId
-	defaultBotNickname
-	shouldShowDisclaimer
+    id
+    chatId
+    defaultBotNickname
+    shouldShowDisclaimer
 }

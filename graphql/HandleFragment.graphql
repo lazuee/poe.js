@@ -1,8 +1,8 @@
 fragment HandleFragment on Viewer {
-	id
-	poeUser {
-		id
-		uid
-		handle
-	}
+    id
+    poeUser {
+        id
+        uid
+        handle
+    }
 }
