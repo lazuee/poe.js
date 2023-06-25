@@ -23,7 +23,7 @@ export interface ClientOptions {
 		warn?: (...args: any[]) => void;
 		error?: (...args: any[]) => void;
 	};
-  prompt?: (conversation: Conversation[]) => void;
+  prompt?: (conversation: Conversation[]) => string;
 }
 
 export interface Message {
