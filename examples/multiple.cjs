@@ -1,58 +1,55 @@
-const { Poe } = require("../");
+require("dotenv/config");
+const { Poe } = require("..");
 
 (async () => {
-	const tokens = [];
-
+	const tokens = process.env["POE_TOKENS"]?.split("|")?.filter((x) => typeof x === "string" && x.length > 5) ?? [];
+	/** @type {Map<string, Poe>} */
 	const poes = new Map();
+
 	for (const token of tokens) {
 		const poe = new Poe({
 			token: token,
-			bot_name: "Sage",
-			// purge conversation by message count, once the queue has been emptied.
-			purge_conversation: {
-				enable: true,
-				count: 0 // By default: 0, there are no messages to be purged.
-			}
+			displayName: "Sage"
 		});
 		poes.set(token, poe);
+		await poe.initialize().catch((error) => {
+			if (error.message.includes("Invalid token")) {
+				console.info(`'${token}' is invalid? skipping...`);
+				poes.delete(token);
+			}
+		});
+	}
+	console.info("-- Poes Initialized --\n");
+
+	console.info("-- Break Message --");
+	for await (const poe of [...poes.values()]) {
+		const message = await poe.history(1);
+		if (message[0] && message[0]["node"]["author"] !== "chat_break") await poe.break_message();
 	}
 
 	// This function adds a request to a queue and waits for its turn to be executed.
 	// The queue is implemented to prevent duplicated responses when sending requests to the chatbot.
-	async function send_message(...args) {
+	const send_message = /** @type {Poe["send_message"]} */ async function (...args) {
 		return new Promise((resolve, reject) => {
 			for (const poe of [...poes.values()]) {
-				if (!poe.pending)
-					return poe
-						.send_message(...args)
+				if (!poe.pendingCount) {
+					poe.send_message(...args)
 						.then(resolve)
 						.catch(reject);
+					return;
+				}
 			}
 
-			for (const poe of [...poes.values()].sort((a, b) => a.pending - b.pending)) {
-				return poe
-					.send_message(...args)
+			for (const poe of [...poes.values()].sort((a, b) => a.pendingCount - b.pendingCount)) {
+				poe.send_message(...args)
 					.then(resolve)
 					.catch(reject);
+				return;
 			}
+
+			reject(new Error("No poe has been settled"));
 		});
-	}
-
-	// Ask, The function adds a request to a queue and waits for its turn to be executed.
-	// I added queue to prevent duplicated response, when sending request on chatbot.
-	send_message("What's your name?", {
-		on_idling: () => console.log(`#1 - task running...`)
-		//on_typing: (text) => console.log(`#1 - ${text}`)
-	}).then((content) => {
-		console.log(`#1 result: ${content}\n`);
-	});
-
-	send_message("Dad joke related to programming.", {
-		on_idling: () => console.log(`#2 - task running...`)
-		//on_typing: (text) => console.log(`#2 - ${text}`)
-	}).then((content) => {
-		console.log(`#2 result: ${content}\n`);
-	});
+	};
 
 	const conversation = [
 		// Prompt setting
@@ -66,17 +63,24 @@ const { Poe } = require("../");
 		// Trigger model to response (Latest user message)
 		{ role: "user", content: "What is your name?", name: "lazuee" }
 	];
-	send_message(conversation, {
-		on_idling: () => console.log(`#3 - task running...`)
-		//on_typing: (text) => console.log(`#3 - ${text}`)
-	}).then((content) => {
-		console.log(`#3 result: ${content}\n`);
+	const questions = ["What's your name?", "Dad joke related to programming.", conversation];
+	const text = {};
+	questions.forEach((question, index) => {
+		// The function adds a request to a queue and waits for its turn to be executed.
+		send_message(question, {
+			async onTyping(message) {
+				reply = message;
+				if (!(message.messageId in text)) text[message.messageId] = "";
+				text[message.messageId] += message.text_new;
+			}
+		}).then((message) => {
+			console.info(`#${index} : ${text[message.messageId]}\n`);
+		});
 	});
 
-	send_message("How are you?", {
-		on_idling: () => console.log(`#4 - task running...`)
-		//on_typing: (text) => console.log(`#4 - ${text}`)
-	}).then((content) => {
-		console.log(`#4 result: ${content}\n`);
-	});
+	while ([...poes.values()].reduce((acc, curr) => acc + curr.pendingCount, 0) !== 0) await new Promise((res) => setTimeout(res, 100));
+
+	console.info("-- Finish --\n");
+
+	for (const poe of [...poes.values()]) poe.destroy();
 })();

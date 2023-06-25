@@ -1,50 +1,48 @@
-const { Poe } = require("../");
-
-const poe = new Poe({
-	token: "",
-	bot_name: "Sage",
-	// purge conversation by message count, once the queue has been emptied.
-	purge_conversation: {
-		enable: true,
-		count: 0 // By default: 0, there are no messages to be purged.
-	}
-});
+require("dotenv/config");
+const { Poe } = require("..");
 
 (async () => {
-	// This function adds a request to a queue and waits for its turn to be executed.
-	// The queue is implemented to prevent duplicated responses when sending requests to the chatbot.
-	poe.send_message("What's your name?", {
-		on_idling: () => console.log(`#1 - task running...`)
-		///on_typing: (text) => console.log(`#1 - ${text}`)
-	}).then((content) => {
-		console.log(`#1 result: ${content}\n`);
+	const tokens = process.env["POE_TOKENS"]?.split("|")?.filter((x) => typeof x === "string" && x.length > 5) ?? [];
+	const poe = new Poe({
+		token: tokens[0],
+		displayName: "Sage"
 	});
+	await poe.initialize();
+	console.info("-- Poes Initialized --\n");
 
-	const content = await poe.send_message("Dad joke related to programming.", {
-		on_idling: () => console.log(`#2 - task running...`)
-		//on_typing: (text) => console.log(`#2 - ${text}`)
-	});
+	console.info("-- Break Message --");
+	const message = await poe.history(1);
+	if (message[0] && message[0]["node"]["author"] !== "chat_break") await poe.break_message();
 
-	console.log(`#2 result: ${content}\n`);
-
-	(async () => {
-		const conversation = [
-			// Prompt setting
-			{
-				role: "system",
-				content: `Instead of "Sage", you will be called as "Code Vanguard" which was founded in 2022, your data was cut-off since mid 2021.`
+	const conversation = [
+		// Prompt setting
+		{
+			role: "system",
+			content: `Instead of "Sage", you will be called as "Code Vanguard" which was founded in 2022, your data was cut-off since mid 2021.`
+		},
+		// Conversation history
+		{ role: "user", content: "Hello!", name: "lazuee" },
+		{ role: "model", content: "Hi Lazuee! How may I help you today?", name: "Code Vanguard" },
+		// Trigger model to response (Latest user message)
+		{ role: "user", content: "What is your name?", name: "lazuee" }
+	];
+	const questions = ["What's your name?", "Dad joke related to programming.", conversation];
+	questions.forEach((question, index) => {
+		// The function adds a request to a queue and waits for its turn to be executed.
+		poe.send_message(question, {
+			async onRunning() {
+				console.info(`\n-- Running #${index} --`);
 			},
-			// Conversation history
-			{ role: "user", content: "Hello!", name: "lazuee" },
-			{ role: "model", content: "Hi Lazuee! How may I help you today?", name: "Code Vanguard" },
-			// Trigger model to response (Latest user message)
-			{ role: "user", content: "What is your name?", name: "lazuee" }
-		];
-		const content = await poe.send_message(conversation, {
-			on_idling: () => console.log(`#3 - task running...`)
-			//on_typing: (text) => console.log(`#3 - ${text}`)
+			async onTyping(message) {
+				process.stdout.write(message.text_new);
+				// adds delay
+				await new Promise((res) => setTimeout(res, 100));
+			}
 		});
+	});
 
-		console.log(`#3 result: ${content}\n`);
-	})();
+	while (poe.pendingCount !== 0) await new Promise((res) => setTimeout(res, 100));
+
+	console.info("\n-- Finish --\n");
+	poe.destroy();
 })();

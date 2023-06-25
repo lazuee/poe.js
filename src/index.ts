@@ -1,391 +1,247 @@
+import { existsSync, readFileSync, writeFileSync, readdirSync } from "fs";
+import { fileURLToPath } from "node:url";
+import { join, extname, basename, dirname } from "path";
+import { Agent as httpAgent } from "http";
+import { Agent as httpsAgent } from "https";
 // @ts-ignore
 import { getRandom } from "random-useragent";
-import { fileURLToPath } from "url";
-import { ofetch } from "ofetch";
-
-import fs from "fs";
-import md5 from "md5";
-import path from "path";
 import WebSocket from "ws";
-
-import type { Conversation, Promisable, Prompt } from "./types";
+import md5 from "md5";
+import axios, { AxiosInstance, AxiosProxyConfig } from "axios";
 import PQueue from "p-queue-compat";
+import { ClientOptions, Conversation, Message, Promisable, Prompt } from "./types";
+import { delay, extractFormKey, generateNonce, uuidv4 } from "./utils";
 
-function extractFormKey(html: string) {
-	const scriptRegex = /<script>if\(.+\)throw new Error;(.+)<\/script>/;
-	const scriptText = html.match(scriptRegex)?.[1];
-	const keyRegex = /var .="([0-9a-f]+)",/;
-	const keyText = scriptText!.match(keyRegex)?.[1];
-	const cipherRegex = /.\[(\d+)\]=.\[(\d+)\]/g;
-	const cipherPairs = Array.from(scriptText!.matchAll(cipherRegex));
+let queries: Record<string, string> = {};
+(() => {
+	const folderPath = join(dirname(fileURLToPath(import.meta.url)), "..", "graphql");
+	const files = readdirSync(folderPath);
+	for (const filename of files) {
+		const ext = extname(filename);
+		if (ext !== ".graphql") continue;
 
-	const formKeyList = new Array(cipherPairs.length).fill("");
-	for (const pair of cipherPairs) {
-		const [formKeyIndex, keyIndex] = pair.slice(1).map(Number);
-		formKeyList[formKeyIndex] = keyText![keyIndex];
+		const queryName = basename(filename, ext);
+		const query = readFileSync(join(folderPath, filename), "utf-8");
+		queries[queryName] = query;
 	}
-	const formKey = formKeyList.join("");
+})();
 
-	return formKey as string;
-}
+export class Poe {
+	#queue = new PQueue({ concurrency: 1 });
+	#queue_pending = 0;
 
-class Poe {
-	private __urls = {
-		request: "https://poe.com/api/gql_POST",
-		receive: "https://poe.com/api/receive_POST",
-		home: "https://poe.com",
-		settings: "https://poe.com/api/settings"
+	#url = new URL("https://poe.com");
+	#url_gql = "/api/gql_POST";
+	#url_settings = "/api/settings";
+
+	#formkey = "";
+	#display_name: string;
+	#request: AxiosInstance;
+	#max_retries: any;
+	#retry_delay: number;
+	#headers: Record<string, any>;
+	#proxy?: AxiosProxyConfig;
+	#channel_data?: Record<string, any>;
+	#next_data?: Record<string, any>;
+	#chat_data?: Record<string, any>;
+	#viewer?: Record<string, any>;
+	#device_id?: string;
+	#ws?: WebSocket;
+	#ws_connected = false;
+	#logger: {
+		info?: (...args: any[]) => void;
+		warn?: (...args: any[]) => void;
+		error?: (...args: any[]) => void;
 	};
-	private __headers: Record<string, any> = {
-		"User-Agent": getRandom(),
-		Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-		"Accept-Encoding": "gzip, deflate, br",
-		"Accept-Language": "en-US,en;q=0.5",
-		Dnt: "1",
-		Te: "trailers",
-		"Upgrade-Insecure-Requests": "1",
+  #prompt: (conversation: Conversation[]) => void;
 
-		// default
-		Referrer: "https://poe.com/",
-		Origin: "https://poe.com",
-		Host: "poe.com",
-		"Sec-Fetch-Dest": "empty",
-		"Sec-Fetch-Mode": "cors",
-		"Sec-Fetch-Site": "same-origin",
-		Connection: "keep-alive"
-	};
+	active_messages: Record<string, string | null> = {};
+	message_queues: Record<string, Record<string, any>[]> = {};
+	suggested_replies: Record<string, any[]> = {};
+	suggested_replies_updated: Record<string, number> = {};
 
-	private __ws?: WebSocket;
-	private __ws_domain = `tch${Math.floor(Math.random() * 1e6)}`;
-	private __formkey?: string;
-	private __channel_data?: Record<string, any>;
-	private __queries = new Map<string, string>();
+	constructor(options: ClientOptions) {
+		this.#logger = options?.logger || {};
+		this.#display_name = options.displayName || "Sage";
+		this.#request = axios.create({
+			baseURL: this.#url.origin,
+			timeout: 60000,
+			httpAgent: new httpAgent({ keepAlive: true }),
+			httpsAgent: new httpsAgent({ keepAlive: true })
+		});
+		this.#max_retries = options.request?.maxRetries || 20;
+		this.#retry_delay = options.request?.retryDelay || 2000;
 
-	private __queue = new PQueue({ concurrency: 1 });
-	private __queue_pending = 0;
-
-	private __bot_name: string;
-	private __bot?: Record<string, any>;
-
-	private __poe_token: string;
-
-	constructor(options: {
-		token: string;
-		bot_name: string;
-		purge_conversation?: {
-			enable: boolean;
-			count: number;
+		this.#headers = {
+			"User-Agent": getRandom(),
+			Referrer: this.#url.href,
+			Host: this.#url.host,
+			Origin: this.#url.origin,
+			Cookie: `p-b=${options.token}; Domain=poe.com`
 		};
-	}) {
-		this.__queue.on("idle", async () => {
-			await new Promise((res) => setTimeout(res, 5 * 1000));
+		this.#request.defaults.headers.common = this.#headers;
 
-			if (!this.__queue.pending) {
-				if (options?.purge_conversation?.enable) {
-					//console.info(`[${options?.token}] purging conversation in`, this.__bot_name);
-					await this.purge(options?.purge_conversation?.count ?? 0).catch(() => {});
+		this.#proxy = options.proxy;
+		if (this.#proxy) {
+			this.#request!.defaults.proxy = this.#proxy;
+			this.#logger.info?.(`Proxy enabled: ${this.#proxy}`);
+		}
+
+		this.#request.interceptors.request.use((config) => {
+			(config as any).retryCount = (config as any).retryCount || 0;
+			return config;
+		});
+		this.#request.interceptors.response.use(
+			(response) => response,
+			(error) => {
+				const { config } = error;
+				this.#logger.warn?.(`Retrying Request : ${config.retryCount}`);
+
+				if (config.retryCount < this.#max_retries) {
+					config.retryCount++;
+					return new Promise((resolve) => setTimeout(() => resolve(this.#request(config)), this.#retry_delay));
 				}
 
-				await this.break_message();
-				this.__queue_pending = 0;
+				return Promise.reject(error);
 			}
-		});
-		this.__bot_name = options?.bot_name;
-		this.__poe_token = options?.token;
-		this.load_queries();
+		);
+
+    this.#prompt = typeof options?.prompt === "function" ? options?.prompt : (conversation: Conversation[]) => {
+      const prompt_settings = [];
+
+      for (const convo of conversation) if (convo.role === "system") prompt_settings.push(convo.content.trim());
+      conversation = conversation.filter((convo) => convo.role !== "system");
+      const latest = conversation.filter((convo) => convo.role === "user").pop();
+      if (latest) conversation = conversation.filter((convo) => convo !== latest);
+
+      let prompt = "";
+      prompt += "**Prompt Settings**:\n\n";
+      prompt += prompt_settings.join("\n\n") + "\n\n";
+      prompt = prompt.trim();
+
+      prompt += "\n\n**Conversation History**:\n\n";
+
+      for (let convo of conversation) {
+        switch (convo?.role) {
+          case "model":
+            if (!convo?.name) convo.name = this.#display_name;
+            prompt += `[${convo.name} - AI Model]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
+            break;
+          case "user":
+            if (!convo?.name) convo.name = "Unnamed";
+            prompt += `[${convo.name} - User]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
+            break;
+        }
+      }
+      prompt = prompt.trim();
+
+      prompt += "\n\n**Latest User Message**:\n\n";
+      if (latest) prompt += `${latest.content ? latest.content.trim() : "No message"}\n\n`;
+      prompt = prompt.trim();
+
+      prompt += "\n\n**Latest AI Model Response**:";
+
+      return prompt.trim();
+    };
 	}
 
-	private load_queries() {
-		const folder_path = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "graphql");
-		const files = fs.readdirSync(folder_path);
-		for (const filename of files) {
-			const ext = path.extname(filename);
-			if (ext !== ".graphql") continue;
+	get pendingCount() {
+		return this.#queue_pending;
+	}
 
-			const query_name = path.basename(filename, ext);
-			try {
-				const query = fs.readFileSync(path.join(folder_path, filename), "utf-8");
-				this.__queries.set(query_name, query);
-			} catch (error: any) {
-				console.warn(`Failed to load query '${query_name}': ${error.message}`);
-			}
+	async #reconnect() {
+		if (!this.#ws_connected) {
+			this.#logger.info?.("WebSocket died. Reconnecting...");
+			this.#disconnectWS();
+			await this.initialize();
 		}
 	}
 
-	get queue() {
-		return this.__queue;
+	async initialize() {
+		this.#next_data = await this.#getNextData();
+		this.#channel_data = await this.#getChannelData();
+		this.#chat_data = await this.#getChatData();
+		this.#device_id = this.#getDeviceID();
+
+		await this.#subscribe();
+		await this.#connectWS();
 	}
 
-	get pending() {
-		return this.__queue_pending;
+	async destroy() {
+		await this.#disconnectWS();
 	}
+	async #getNextData() {
+		this.#logger.info?.("Downloading next_data...");
 
-	private async init(): Promise<void> {
-		// Return if still has formkey
-		if (this.__formkey && this.__bot) return;
+		try {
+			const result = await this.#request.get(this.#url.origin);
+			const jsonRegex = /<script id="__NEXT_DATA__" type="application\/json">(.+?)<\/script>/;
+			const jsonText = jsonRegex.exec(result["data"])![1];
+			const nextData = JSON.parse(jsonText);
 
-		// Add the token to headers cookie
-		this.__headers.Cookie = "p-b=" + this.__poe_token + "; Domain=poe.com";
+			this.#formkey = extractFormKey(result["data"]);
+			this.#viewer = nextData.props.pageProps.payload.viewer;
 
-		// Fetch the home page and extract the form key and next data
-		let status = 0,
-			html = "";
-
-		await ofetch(this.__urls.home, {
-			headers: this.__headers,
-			onResponse: ({ response }) => {
-				// console.log(response.status, "html");
-				status = response.status;
-				html = response._data;
-			}
-		}).catch(() => {});
-
-		switch (status) {
-			case 403: {
-				// Got ratelimit, delete existing values
-				delete this.__formkey;
-				delete this.__channel_data;
-				delete this.__bot;
-
-				throw new Error("Token got ratelimit");
-			}
-			case 200: {
-				const json_regex = /<script id="__NEXT_DATA__" type="application\/json">(.+?)<\/script>/;
-				const json_text = json_regex.exec(html)?.[1] ?? "";
-				const next_data = JSON.parse(json_text);
-				this.__formkey = extractFormKey(html);
-
-				if (!next_data.props?.pageProps?.payload?.viewer?.uid)
-					// Check if the token is valid
-					throw new Error("Invalid token.");
-
-				// Fetch the channel data from the settings page
-				const settings = await ofetch<{ tchannelData: Record<string, any> }>(this.__urls.settings, {
-					headers: this.__headers,
-					parseResponse: JSON.parse
-				});
-				this.__channel_data = settings.tchannelData;
-
-				// Fetch bot data
-				this.__bot = await new Promise((resolve, reject) => {
-					(async () => {
-						while (true) {
-							await ofetch(`https://poe.com/_next/data/${next_data.buildId}/${this.__bot_name}.json`, {
-								headers: this.__headers,
-								onResponse: ({ response }) => {
-									if (response.status !== 200) return;
-									resolve(response._data?.pageProps?.payload?.chatOfBotDisplayName as Record<string, any>);
-								}
-							}).catch(() => reject(new Error("Invalid Bot name")));
-
-							await new Promise((res) => setTimeout(res, 5 * 1000));
-						}
-					})();
-				});
-
-				return;
-			}
-			default:
-				break;
+			return nextData;
+		} catch (error) {
+			this.#logger.error?.("Error occured in getNextData", error);
 		}
-
-		await new Promise((resolve) => setTimeout(resolve, 5 * 1000));
-		return await this.init();
 	}
 
-	private async connect_ws(): Promise<WebSocket> {
-		if (!this.__channel_data) throw new Error("Channel data is empty.");
-
-		const query = `min_seq=${this.__channel_data.minSeq}&channel=${this.__channel_data.channel}&hash=${this.__channel_data.channelHash}`;
-		const url = `wss://${this.__ws_domain}.tch.${this.__channel_data.baseHost}/up/${this.__channel_data.boxName}/updates?${query}`;
-		const headers = { "User-Agent": this.__headers["User-Agent"] };
-		const ws = new WebSocket(url, { headers, rejectUnauthorized: false });
-
-		return new Promise((resolve) => {
-			ws.onopen = () => {
-				// console.info("Websocket is ready...");
-				return resolve(ws);
-			};
-		});
-	}
-
-	private async disconnect_ws() {
-		await this.break_message();
-
-		return new Promise((resolve, reject) => {
-			if (!this.__ws) return resolve(true);
-
-			this.__ws.onclose = () => {
-				console.info("Websocket closed.");
-				delete this.__ws;
-				resolve(true);
-			};
-
-			try {
-				this.__ws.close();
-			} catch (error) {
-				reject(error);
-			}
-		});
-	}
-
-	private async request(queryName: string, variables: Record<string, any>, queryDisplayName?: string) {
-		const query = this.__queries.get(queryName);
-		if (!query) throw new Error(`Query '${queryName}' not found.`);
-		if (!this.__channel_data) throw new Error("Channel data is empty.");
-		if (!this.__formkey) throw new Error("Formkey is empty.");
-
-		let result: Record<string, any> | undefined;
-		const payload = { query, variables };
-		if (queryDisplayName) (payload as any)["queryName"] = queryDisplayName;
-
-		let attempts = 0;
-		while (!result) {
-			if (attempts === 20) throw new Error("Too many attempts.");
-			attempts++;
-
-			try {
-				const headers = {
-					"poe-formkey": this.__formkey ?? "",
-					"poe-tchannel": this.__channel_data?.channel ?? "",
-					"poe-tag-id": md5(JSON.stringify(payload) + this.__formkey + "WpuLMiXEKKE98j56k"),
-					...this.__headers
-				};
-
-				const response = await ofetch<Record<string, any>>(this.__urls.request, {
-					method: "POST",
-					body: payload,
-					headers
-				});
-				if (response.data) result = response;
-				else {
-					// console.warn(`Query '${queryName}' returned an error. Retrying in 5 seconds...`);
-					await new Promise((resolve) => setTimeout(resolve, 5 * 1000));
-				}
-			} catch (error) {
-				// console.warn(`Query '${queryName}' failed. Retrying in 5 seconds...`);
-				await new Promise((resolve) => setTimeout(resolve, 5 * 1000));
-			}
+	async #getChannelData() {
+		this.#logger.info?.("Downloading channel data...");
+		try {
+			const result = await this.#request.get(this.#url_settings);
+			return result["data"].tchannelData;
+		} catch (error) {
+			this.#logger.error?.("Error occured in getChannelData", error);
 		}
-
-		return result;
 	}
 
-	async send_message(prompt: Prompt, options?: { on_idling?: () => Promisable<void>; on_typing?: (response: string) => Promisable<void> }): Promise<string> {
-		this.__queue_pending++;
+	async #getChatData() {
+		if (!this.#viewer?.availableBotsConnection) throw new Error("Invalid token.");
 
-		const result = await this.__queue.add(async () => {
-			if (typeof options?.on_idling === "function") await options.on_idling();
-
-			let response = "",
-				error = undefined as unknown as Error;
-
-			try {
-				await this.init();
-
-				const timeout = setTimeout(() => {
-					response = "[timeout]";
-					this.disconnect_ws();
-				}, 3 * 60 * 1000);
-				if (!this.__ws) this.__ws = await this.connect_ws();
-				await this.subscribe();
-
-				const get_prompt = (conversation: Conversation[]) => {
-					const prompt_settings = [];
-
-					for (const convo of conversation) if (convo.role === "system") prompt_settings.push(convo.content.trim());
-					conversation = conversation.filter((convo) => convo.role !== "system");
-					const latest = conversation.filter((convo) => convo.role === "user").pop();
-					if (latest) conversation = conversation.filter((convo) => convo !== latest);
-
-					prompt = "";
-					prompt += "**Prompt Settings**:\n\n";
-					prompt += prompt_settings.join("\n\n") + "\n\n";
-					prompt = prompt.trim();
-
-					prompt += "\n\n**Conversation History**:\n\n";
-
-					for (let convo of conversation) {
-						switch (convo?.role) {
-							case "model":
-								if (!convo?.name) convo.name = this.__bot_name;
-								prompt += `[${convo.name} - AI Model]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
-								break;
-							case "user":
-								if (!convo?.name) convo.name = "Unnamed";
-								prompt += `[${convo.name} - User]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
-								break;
-						}
-					}
-					prompt = prompt.trim();
-
-					prompt += "\n\n**Latest User Message**:\n\n";
-					if (latest) prompt += `${latest.content ? latest.content.trim() : "No message"}\n\n`;
-					prompt = prompt.trim();
-
-					prompt += "\n\n**Latest AI Model Response**:";
-
-					return prompt.trim();
-				};
-
-				this.request("AddHumanMessageMutation", {
-					bot: this.__bot?.defaultBotObject.nickname,
-					query: typeof prompt === "object" ? get_prompt(prompt) : prompt,
-					chatId: this.__bot?.chatId,
-					source: null,
-					withChatBreak: false
-				});
-
-				await this.get_message((text) => {
-					response = text;
-					if (typeof options?.on_typing === "function") options.on_typing(text);
-				});
-
-				clearTimeout(timeout);
-			} catch (err: any) {
-				error = err?.stack ? err : new Error("Something went wrong while waiting for bot response.");
-			} finally {
-				this.__queue_pending--;
-				if (error) throw error;
-
-				if (typeof response === "string" && response.length > 1 && response !== "[timeout]") {
-					await new Promise((resolve) => setTimeout(resolve, 3 * 1000));
-					return response;
-				}
-
-				await this.disconnect_ws();
-				// console.log("[ask] response is empty, trying again,..");
-				return await this.send_message(prompt, options);
-			}
-		});
-
-		return result ?? "";
+		this.#logger.info?.("Downloading chat data...");
+		try {
+			const result = await this.#request.get(`${this.#url.origin}/_next/data/${this.#next_data!.buildId}/${this.#display_name}.json`);
+			return result["data"].pageProps.payload.chatOfBotDisplayName;
+		} catch (error) {
+			this.#logger.error?.("Failed to download chat data", error);
+		}
 	}
 
-	async break_message() {
-		const result = await this.request("AddMessageBreakMutation", {
-			chatId: this.__bot?.chatId
-		});
+	#getDeviceID() {
+		const userId = this.#viewer?.poeUser?.id;
+		const device_id_path = join(dirname(fileURLToPath(import.meta.url)), "..", "poe_device.json");
+		let device_ids: Record<string, string> = {};
 
-		return result?.data?.messageBreakCreate?.message;
+		if (existsSync(device_id_path)) device_ids = JSON.parse(readFileSync(device_id_path, "utf8"));
+		if (device_ids.hasOwnProperty(userId)) return device_ids[userId];
+
+		const device_id = uuidv4();
+		device_ids[userId] = device_id;
+		writeFileSync(device_id_path, JSON.stringify(device_ids, null, 2));
+
+		return device_id;
 	}
 
-	private async subscribe() {
-		await this.request(
+	async #subscribe() {
+		this.#logger.info?.("Subscribing to mutations");
+		await this.#send_query(
 			"SubscriptionsMutation",
 			{
 				subscriptions: [
 					{
 						subscriptionName: "messageAdded",
-						query: this.__queries.get("MessageAddedSubscription")
+						query: queries["MessageAddedSubscription"]
 					},
 					{
 						subscriptionName: "viewerStateUpdated",
-						query: this.__queries.get("ViewerStateUpdatedSubscription")
+						query: queries["ViewerStateUpdatedSubscription"]
 					},
 					{
 						subscriptionName: "viewerMessageLimitUpdated",
-						query: this.__queries.get("ViewerMessageLimitUpdatedSubscription")
+						query: queries["ViewerMessageLimitUpdatedSubscription"]
 					}
 				]
 			},
@@ -393,59 +249,228 @@ class Poe {
 		);
 	}
 
-	private async get_message(on_typing?: (text: string) => void) {
-		return new Promise((resolve, reject) => {
-			if (!this.__ws) return reject(new Error("Websocket is null"));
+	async #send_query(queryName: string, variables: Record<string, any>, queryDisplayName?: string) {
+		for (let i = 0; i < 20; i++) {
+			const payload = { query: queries[queryName], variables };
+			if (queryDisplayName) (payload as any)["queryName"] = queryDisplayName;
 
-			let completed = false;
-			const onMessage = (data: any) => {
-				const { messages } = JSON.parse(data.toString()) ?? {};
-				// Return early if the data does not contain any messages
-				if (!Array.isArray(messages)) return;
+			const headers = {
+				"poe-formkey": this.#formkey ?? "",
+				"poe-tchannel": this.#channel_data?.channel ?? "",
+				"poe-tag-id": md5(JSON.stringify(payload) + this.#formkey + "WpuLMiXEKKE98j56k"),
+				...this.#headers
+			};
+			const result = await this.#request.post(this.#url_gql, payload, { headers });
+			if (!("data" in result.data)) {
+				this.#logger.warn?.(`'${queryName}' returns no data | Retrying (${i + 1}/20)`);
+				await delay(2000);
+				continue;
+			}
 
-				for (const message_str of messages) {
-					const message_data = JSON.parse(message_str);
+			return result.data;
+		}
 
-					// Skip messages that are not subscription updates
-					if (message_data.message_type !== "subscriptionUpdate") continue;
+		throw new Error(`${queryName} failed too many times.`);
+	}
 
-					const message = message_data.payload?.data?.messageAdded;
-					if (message?.author === "human") return;
+	async #connectWS() {
+		if (!this.#channel_data) throw new Error("Channel data is empty.");
+		const query = `?min_seq=${this.#channel_data.minSeq}&channel=${this.#channel_data.channel}&hash=${this.#channel_data.channelHash}`;
+		const ws_domain = `tch${Math.floor(Math.random() * 1e6)}`;
+		const ws_url = `wss://${ws_domain}.tch.${this.#channel_data.baseHost}/up/${this.#channel_data.boxName}/updates${query}`;
 
-					if (message?.state !== "complete") {
-						if (typeof message?.text === "string" && message?.text.length > 1) {
-							if (typeof on_typing === "function") on_typing(message.text);
-						}
-					} else {
-						if (completed) return;
-						completed = true;
+		this.#ws_connected = false;
+		this.#ws = new WebSocket(ws_url, {
+			headers: {
+				"User-Agent": this.#headers["User-Agent"]!
+			},
+			rejectUnauthorized: false
+		})
+			.on("message", (message) => {
+				this.#onMessage(message);
+			})
+			.on("open", () => {
+				this.#ws_connected = true;
+			})
+			.on("close", () => {
+				this.#ws_connected = false;
+			})
+			.on("error", (error) => {
+				this.#logger.error?.("Error occured in connectWS", error);
+				this.#disconnectWS();
+			});
+		while (!this.#ws_connected) await delay(10);
+	}
 
-						this.__ws?.removeListener("message", onMessage);
-						resolve(true);
+	#disconnectWS() {
+		if (this.#ws) this.#ws.close();
+		this.#ws_connected = false;
+	}
+
+	async #onMessage(data: WebSocket.RawData) {
+		try {
+			const { messages } = JSON.parse(data.toString()) ?? {};
+			// If the data doesn't contain any messages, return.
+			if (!Array.isArray(messages)) return;
+
+			for (const message_str of messages) {
+				const message_data = JSON.parse(message_str);
+				if (message_data["message_type"] != "subscriptionUpdate") continue;
+
+				const message = message_data["payload"]["data"]["messageAdded"];
+				if (!message) return;
+
+				if ("suggestedReplies" in message && Array.isArray(message["suggestedReplies"])) {
+					this.suggested_replies[message["messageId"]] = [...message["suggestedReplies"]];
+					this.suggested_replies_updated[message["messageId"]] = Date.now();
+				}
+
+				const copiedDict = Object.assign({}, this.active_messages);
+				for (const [key, value] of Object.entries(copiedDict)) {
+					// Add the message to the queue that matches its message id
+					if (value === message["messageId"] && key in this.message_queues) {
+						this.message_queues[key].push(message);
+						return;
+					}
+
+					// The response id is tied to the human message id
+					else if (key !== "pending" && value === null && message["state"] !== "complete") {
+						this.active_messages[key] = message["messageId"];
+						this.message_queues[key].push(message);
 					}
 				}
-			};
-			this.__ws.on("message", onMessage);
+			}
+		} catch (error) {
+			this.#logger.error?.("Error occurred in onMessage", error);
+			this.#disconnectWS();
+			await this.#connectWS();
+		}
+	}
 
-			const onError = (error: Error) => {
-				this.__ws?.removeListener("error", onError);
-				reject(error);
-			};
-			this.__ws.on("error", onError);
+	async #pingWS() {
+		const pong = new Promise((resolve) => {
+			if (this.#ws && this.#ws.readyState === WebSocket.OPEN) this.#ws.ping();
+			this.#ws?.once("pong", () => resolve("ok"));
 		});
+		const timeout = new Promise((resolve) => setTimeout(() => resolve("timeout"), 5000));
+		const result = await Promise.race([pong, timeout]);
+
+		if (result == "ok") return true;
+		else {
+			this.#logger.warn?.("Websocket ping timed out.");
+			this.#ws_connected = false;
+			return false;
+		}
+	}
+
+	async send_message(prompt: Prompt, options?: { withChatBreak?: boolean; timeout?: number; onRunning?: () => Promisable<any>; onTyping?: (message: Message) => Promisable<any> }) {
+		this.#queue_pending += 1;
+
+		const result = await this.#queue.add(async () => {
+			if (typeof options?.onRunning === "function") await options.onRunning();
+			await this.#pingWS();
+			await this.#reconnect();
+
+			// Wait until the completion of the active message before sending another one.
+			while (Object.values(this.active_messages).includes(null)) await delay(10);
+
+			// In progress, please wait for further updates of response.
+			this.active_messages["pending"] = null;
+
+			const messageData = await this.#send_query("SendMessageMutation", {
+				bot: this.#chat_data!["defaultBotObject"]["model"],
+				query: typeof prompt === "object" ? this.#prompt(prompt) : prompt,
+				chatId: this.#chat_data!["chatId"],
+				source: null,
+				clientNonce: generateNonce(16),
+				sdid: this.#device_id,
+				withChatBreak: options?.withChatBreak ?? false
+			});
+
+			delete this.active_messages["pending"];
+			if (!messageData["data"]["messageEdgeCreate"]["message"]) throw new Error(`Daily limit reached for ${this.#display_name}.`);
+
+			let humanMessageId;
+			try {
+				const humanMessage = messageData["data"]["messageEdgeCreate"]["message"];
+				humanMessageId = humanMessage["node"]["messageId"];
+			} catch (error) {
+				throw new Error(`An unknown error occured. Raw response data: ${messageData}`);
+			}
+
+			// The current message is awaiting for response
+			this.active_messages[humanMessageId] = null;
+			this.message_queues[humanMessageId] = [];
+
+			let timeout = options?.timeout ?? 60;
+			let lastText = "";
+			let messageId;
+			let message = {} as Message;
+			while (true) {
+				try {
+					if (timeout == 0) throw new Error("Response timed out.");
+
+					const _message = this.message_queues[humanMessageId].shift();
+					if (!_message) {
+						timeout -= 1;
+						await delay(1000);
+						continue;
+					}
+
+					// Wait until the message is marked as complete before proceeding.
+					if (_message["state"] === "complete") {
+						if (lastText && _message["messageId"] === messageId) break;
+						else continue;
+					}
+
+					// Update response
+					_message["text_new"] = _message["text"].substring(lastText.length);
+					_message["suggestedReplies"] = this.suggested_replies[_message["messageId"]] ?? [];
+					_message["suggestedRepliesUpdated"] = this.suggested_replies_updated[_message["messageId"]] ?? null;
+
+					lastText = _message["text"];
+					messageId = _message["messageId"];
+
+					const keys: (keyof Message)[] = ["id", "messageId", "state", "author", "text", "text_new", "linkifiedText", "contentType", "suggestedReplies", "suggestedRepliesUpdated", "creationTime", "clientNonce", "chat", "vote", "voteReason", "__isNode"];
+					message = keys.reduce((obj, key) => {
+						if (key in _message) (obj as any)[key] = _message[key];
+						return obj;
+					}, {} as Message);
+
+					if (typeof options?.onTyping === "function") await options.onTyping(message);
+				} catch (error) {
+					delete this.active_messages[humanMessageId];
+					delete this.message_queues[humanMessageId];
+					throw new Error("Response timed out.");
+				}
+			}
+
+			delete this.active_messages[humanMessageId];
+			delete this.message_queues[humanMessageId];
+			this.#queue_pending -= 1;
+
+			return message;
+		});
+
+		return result ?? null;
+	}
+
+	async break_message() {
+		const result = await this.#send_query("AddMessageBreakMutation", {
+			chatId: this.#chat_data!["chatId"]
+		});
+		return result["data"]["messageBreakCreate"]["message"];
 	}
 
 	async history(count = 25, cursor = null) {
-		await this.init();
-
 		try {
-			const result = await this.request("ChatListPaginationQuery", {
-				count,
-				cursor,
-				id: this.__bot?.id
+			const result = await this.#send_query("ChatListPaginationQuery", {
+				count: count,
+				cursor: cursor,
+				id: this.#chat_data!["id"]
 			});
 
-			const messages = result?.data?.node?.messagesConnection?.edges;
+			const messages = result["data"]["node"]["messagesConnection"]["edges"];
 			if (!messages) throw new Error("No messages found in result");
 
 			return messages;
@@ -455,8 +480,6 @@ class Poe {
 	}
 
 	async delete(...message_ids: (number | number[])[]) {
-		await this.init();
-
 		try {
 			// Flatten the array of arrays and ensure each item is an integer
 			const ids = message_ids
@@ -467,7 +490,7 @@ class Poe {
 			// If no valid message IDs are provided, return null
 			if (ids.length === 0) return null;
 
-			const result = await this.request("DeleteMessageMutation", {
+			const result = await this.#send_query("DeleteMessageMutation", {
 				messageIds: ids
 			});
 
@@ -477,10 +500,8 @@ class Poe {
 		}
 	}
 
-	async purge(count: number = -1) {
-		try {
-			// console.info(`Purging messages from ${this.__bot.defaultBotObject.displayName}`);
-
+	async purge(count = -1) {
+    try {
 			// Set up a loop to delete messages in batches of 50
 			let last_messages = (await this.history(50)).reverse();
 			while (last_messages.length) {
@@ -491,7 +512,7 @@ class Poe {
 					if (count === 0) break;
 					count--;
 
-					const message_id = message?.node?.messageId;
+					const message_id = message["node"]["messageId"];
 					if (message_id) message_ids.push(parseInt(message_id));
 				}
 
@@ -515,5 +536,3 @@ class Poe {
 		}
 	}
 }
-
-export { Conversation, Poe, Prompt };
