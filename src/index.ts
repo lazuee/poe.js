@@ -11,6 +11,7 @@ import axios, { AxiosInstance, AxiosProxyConfig } from "axios";
 import PQueue from "p-queue-compat";
 import { ClientOptions, Conversation, Message, Promisable, Prompt } from "./types";
 import { delay, extractFormKey, generateNonce, uuidv4 } from "./utils";
+export * from "./types";
 
 let queries: Record<string, string> = {};
 (() => {
@@ -180,7 +181,7 @@ export class Poe {
 			const nextData = JSON.parse(jsonText);
 
 			this.#formkey = extractFormKey(result["data"]);
-			this.#viewer = nextData.props.pageProps.payload.viewer;
+			this.#viewer = nextData.props.pageProps.data.viewer;
 
 			return nextData;
 		} catch (error) {
@@ -204,7 +205,7 @@ export class Poe {
 		this.#logger.info?.("Downloading chat data...");
 		try {
 			const result = await this.#request.get(`${this.#url.origin}/_next/data/${this.#next_data!.buildId}/${this.#display_name}.json`);
-			return result["data"].pageProps.payload.chatOfBotDisplayName;
+			return result["data"].pageProps.data.chatOfBotDisplayName;
 		} catch (error) {
 			this.#logger.error?.("Failed to download chat data", error);
 		}

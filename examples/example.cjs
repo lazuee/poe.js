@@ -7,8 +7,15 @@ const { Poe } = require("..");
         token: tokens[0],
         displayName: "Sage"
     });
-    await poe.initialize();
-    console.info("-- Poes Initialized --\n");
+
+    try {
+        await poe.initialize();
+        console.info(`'${token}' initialized...`)
+    } catch(error) {
+        if (error.message.includes("Invalid token")) {
+            console.warn(`'${token}' is invalid? skipping...`);
+        }
+    };
 
     const conversation = [
         // Prompt setting
