@@ -15,6 +15,7 @@ const { Poe } = require("..");
 		try {
 			await poe.initialize();
 			console.info(`'${token}' initialized...`);
+			poes.set(token, poe);
 		} catch(error) {
 			if (error.message.includes("Invalid token")) {
 				console.warn(`'${token}' is invalid? skipping...`);
