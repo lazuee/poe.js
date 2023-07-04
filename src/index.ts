@@ -10,7 +10,7 @@ import md5 from "md5";
 import axios, { AxiosInstance, AxiosProxyConfig } from "axios";
 import PQueue from "p-queue-compat";
 import { ClientOptions, Conversation, Message, Promisable, Prompt } from "./types";
-import { delay, extractFormKey, generateNonce, uuidv4 } from "./utils";
+import { delay, extractFormKey, generateNonce, getValue, uuidv4 } from "./utils";
 export * from "./types";
 
 let queries: Record<string, string> = {};
@@ -54,12 +54,15 @@ export class Poe {
 		warn?: (...args: any[]) => void;
 		error?: (...args: any[]) => void;
 	};
-  #prompt: (conversation: Conversation[]) => void;
+	#prompt: (conversation: Conversation[]) => void;
 
 	active_messages: Record<string, string | null> = {};
 	message_queues: Record<string, Record<string, any>[]> = {};
 	suggested_replies: Record<string, any[]> = {};
 	suggested_replies_updated: Record<string, number> = {};
+
+	viewerKey = "viewer";
+	chatDataKey = "chatOfBotHandle";
 
 	constructor(options: ClientOptions) {
 		this.#logger = options?.logger || {};
@@ -107,43 +110,43 @@ export class Poe {
 			}
 		);
 
-    this.#prompt = typeof options?.prompt === "function" ? options?.prompt : (conversation: Conversation[]) => {
-      const prompt_settings = [];
+		this.#prompt = typeof options?.prompt === "function" ? options?.prompt : (conversation: Conversation[]) => {
+			const prompt_settings = [];
 
-      for (const convo of conversation) if (convo.role === "system") prompt_settings.push(convo.content.trim());
-      conversation = conversation.filter((convo) => convo.role !== "system");
-      const latest = conversation.filter((convo) => convo.role === "user").pop();
-      if (latest) conversation = conversation.filter((convo) => convo !== latest);
+			for (const convo of conversation) if (convo.role === "system") prompt_settings.push(convo.content.trim());
+			conversation = conversation.filter((convo) => convo.role !== "system");
+			const latest = conversation.filter((convo) => convo.role === "user").pop();
+			if (latest) conversation = conversation.filter((convo) => convo !== latest);
 
-      let prompt = "";
-      prompt += "**Prompt Settings**:\n\n";
-      prompt += prompt_settings.join("\n\n") + "\n\n";
-      prompt = prompt.trim();
+			let prompt = "";
+			prompt += "**Prompt Settings**:\n\n";
+			prompt += prompt_settings.join("\n\n") + "\n\n";
+			prompt = prompt.trim();
 
-      prompt += "\n\n**Conversation History**:\n\n";
+			prompt += "\n\n**Conversation History**:\n\n";
 
-      for (let convo of conversation) {
-        switch (convo?.role) {
-          case "model":
-            if (!convo?.name) convo.name = this.#display_name;
-            prompt += `[${convo.name} - AI Model]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
-            break;
-          case "user":
-            if (!convo?.name) convo.name = "Unnamed";
-            prompt += `[${convo.name} - User]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
-            break;
-        }
-      }
-      prompt = prompt.trim();
+			for (let convo of conversation) {
+				switch (convo?.role) {
+					case "model":
+						if (!convo?.name) convo.name = this.#display_name;
+						prompt += `[${convo.name} - AI Model]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
+						break;
+					case "user":
+						if (!convo?.name) convo.name = "Unnamed";
+						prompt += `[${convo.name} - User]: ${convo?.content ? convo.content.trim() : "No message"}\n\n`;
+						break;
+				}
+			}
+			prompt = prompt.trim();
 
-      prompt += "\n\n**Latest User Message**:\n\n";
-      if (latest) prompt += `${latest.content ? latest.content.trim() : "No message"}\n\n`;
-      prompt = prompt.trim();
+			prompt += "\n\n**Latest User Message**:\n\n";
+			if (latest) prompt += `${latest.content ? latest.content.trim() : "No message"}\n\n`;
+			prompt = prompt.trim();
 
-      prompt += "\n\n**Latest AI Model Response**:";
+			prompt += "\n\n**Latest AI Model Response**:";
 
-      return prompt.trim();
-    };
+			return prompt.trim();
+		};
 	}
 
 	get pendingCount() {
@@ -164,6 +167,10 @@ export class Poe {
 		this.#chat_data = await this.#getChatData();
 		this.#device_id = this.#getDeviceID();
 
+		if (!this.#chat_data || !this.#viewer) {
+			throw new Error(`Poe API has changed! Please update the ${!this.#viewer && "viewerKey" || !this.#chat_data && "chatDataKey"}.`)
+		}
+
 		await this.#subscribe();
 		await this.#connectWS();
 	}
@@ -181,7 +188,7 @@ export class Poe {
 			const nextData = JSON.parse(jsonText);
 
 			this.#formkey = extractFormKey(result["data"]);
-			this.#viewer = nextData.props.pageProps.data.viewer;
+			this.#viewer = getValue(nextData, this.viewerKey, "object");
 
 			return nextData;
 		} catch (error) {
@@ -205,7 +212,7 @@ export class Poe {
 		this.#logger.info?.("Downloading chat data...");
 		try {
 			const result = await this.#request.get(`${this.#url.origin}/_next/data/${this.#next_data!.buildId}/${this.#display_name}.json`);
-			return result["data"].pageProps.data.chatOfBotDisplayName;
+			return getValue(result["data"], this.chatDataKey, "object");
 		} catch (error) {
 			this.#logger.error?.("Failed to download chat data", error);
 		}
@@ -502,7 +509,7 @@ export class Poe {
 	}
 
 	async purge(count = -1) {
-    try {
+		try {
 			// Set up a loop to delete messages in batches of 50
 			let last_messages = (await this.history(50)).reverse();
 			while (last_messages.length) {
