@@ -23,7 +23,7 @@ export function extractFormKey(html: string) {
 	}
 	const formKey = formKeyList.join("");
 
-	return formKey;
+	return formKey.slice(0, -1);
 }
 
 export function generateNonce(length: number) {
@@ -36,4 +36,16 @@ export function generateNonce(length: number) {
 	}
 
 	return result;
+}
+
+export const getValue = (obj: any, key: string, type: string): any => {
+    const stack = [obj];
+    while (stack.length > 0) {
+        const current = stack.pop();
+        if (typeof current === 'object' && [undefined, null].every((x) => current !== x)) {
+            if (typeof current?.[key] === type)
+                return current[key];
+            stack.push(...Object.values(current));
+        }
+    }
 }
