@@ -39,13 +39,15 @@ export function generateNonce(length: number) {
 }
 
 export const getValue = (obj: any, key: string, type: string): any => {
-    const stack = [obj];
-    while (stack.length > 0) {
-        const current = stack.pop();
-        if (typeof current === 'object' && [undefined, null].every((x) => current !== x)) {
-            if (typeof current?.[key] === type)
-                return current[key];
-            stack.push(...Object.values(current));
-        }
-    }
-}
+	const stack = [obj];
+	const isObject = (value: any): value is Record<any, any> =>
+		typeof value === "object" &&
+		[undefined, null].every((x) => x !== value);
+	while (stack.length > 0) {
+		const current = stack.pop();
+		if (isObject(current) && typeof current?.[key] === type)
+			return current[key];
+
+		if (isObject(current)) stack.push(...Object.values(current));
+	}
+};
