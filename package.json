@@ -1,7 +1,7 @@
 {
 	"description": "A package for interacting with AI models from poe.com",
 	"name": "@lazuee/poe.js",
-	"version": "0.1.7",
+	"version": "0.1.8",
 	"license": "MIT",
 	"sideEffects": false,
 	"type": "module",
@@ -57,19 +57,19 @@
 		"tag": "latest"
 	},
 	"devDependencies": {
-		"typescript": "^5.1.6",
-		"unbuild": "^1.2.1"
+		"typescript": "5.1.6",
+		"unbuild": "1.2.1"
 	},
 	"dependencies": {
-		"@types/md5": "^2.3.2",
-		"@types/node": "20.3.3",
-		"@types/ws": "^8.5.5",
+		"@types/md5": "2.3.2",
+		"@types/node": "20.4.1",
+		"@types/ws": "8.5.5",
 		"axios": "1.4.0",
 		"dotenv": "16.3.1",
-		"md5": "^2.3.0",
+		"md5": "2.3.0",
 		"p-queue-compat": "1.0.223",
 		"random-useragent": "0.5.0",
-		"ws": "^8.13.0"
+		"ws": "8.13.0"
 	},
 	"packageManager": "pnpm@8.3.1"
 }
