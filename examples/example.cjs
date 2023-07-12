@@ -10,10 +10,10 @@ const { Poe } = require("..");
 
     try {
         await poe.initialize();
-        console.info(`'${token}' initialized...`)
+        console.info(`'${tokens[0]}' initialized...`)
     } catch(error) {
         if (error.message.includes("Invalid token")) {
-            console.warn(`'${token}' is invalid? skipping...`);
+            console.warn(`'${tokens[0]}' is invalid? skipping...`);
         }
     };
 
@@ -56,7 +56,7 @@ const { Poe } = require("..");
     const message_4 = await poe.history(1);
     if ((message_4[0] && message_4[0]["node"]["author"] === "chat_break") || !message_4[0]) console.info("\n-- Human Message Deleted --");
 
-    await poe.purge(-1); // -1 means, delete all message
+    await poe.purge_all(); // delete all user messages
     const message_5 = await poe.history(-1); // -1 means, get all message
     if (message_5.length === 0) console.info("\n-- All Message Deleted --");
 

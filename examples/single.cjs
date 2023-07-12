@@ -43,6 +43,7 @@ const { Poe } = require("..");
 
 	while (poe.pendingCount !== 0) await new Promise((res) => setTimeout(res, 100));
 
+	await poe.purge_all(); // delete all user messages
 	console.info("\n-- Finish --\n");
 	poe.destroy();
 })();

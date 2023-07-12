@@ -82,7 +82,8 @@ const { Poe } = require("..");
 
 	while ([...poes.values()].reduce((acc, curr) => acc + curr.pendingCount, 0) !== 0) await new Promise((res) => setTimeout(res, 100));
 
-	console.info("-- Finish --\n");
+    for (const poe of [...poes.values()]) await poe.purge_all(); // delete all user messages
 
+	console.info("-- Finish --\n");
 	for (const poe of [...poes.values()]) poe.destroy();
 })();
