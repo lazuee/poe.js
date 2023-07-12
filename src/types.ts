@@ -14,6 +14,7 @@ export interface ClientOptions {
 	token: string;
 	displayName: string;
 	proxy?: AxiosProxyConfig;
+	useragent?: string;
 	request?: {
 		maxRetries?: number;
 		retryDelay?: number;
@@ -23,7 +24,7 @@ export interface ClientOptions {
 		warn?: (...args: any[]) => void;
 		error?: (...args: any[]) => void;
 	};
-  prompt?: (conversation: Conversation[]) => string;
+	prompt?: (conversation: Conversation[]) => string;
 }
 
 export interface Message {
